@@ -1,4 +1,4 @@
-use crate::config::schema::WhatsAppConfig;
+use crate::config::schema::{IrcConfig, WhatsAppConfig};
 use crate::config::{
     AutonomyConfig, BrowserConfig, ChannelsConfig, ComposioConfig, Config, DiscordConfig,
     HeartbeatConfig, IMessageConfig, MatrixConfig, MemoryConfig, ObservabilityConfig,
@@ -96,6 +96,7 @@ pub fn run_wizard() -> Result<Config> {
         autonomy: AutonomyConfig::default(),
         runtime: RuntimeConfig::default(),
         reliability: crate::config::ReliabilityConfig::default(),
+        model_routes: Vec::new(),
         heartbeat: HeartbeatConfig::default(),
         channels_config,
         memory: memory_config, // User-selected memory backend
@@ -129,7 +130,8 @@ pub fn run_wizard() -> Result<Config> {
         || config.channels_config.discord.is_some()
         || config.channels_config.slack.is_some()
         || config.channels_config.imessage.is_some()
-        || config.channels_config.matrix.is_some();
+        || config.channels_config.matrix.is_some()
+        || config.channels_config.email.is_some();
 
     if has_channels && config.api_key.is_some() {
         let launch: bool = Confirm::new()
@@ -184,7 +186,8 @@ pub fn run_channels_repair_wizard() -> Result<Config> {
         || config.channels_config.discord.is_some()
         || config.channels_config.slack.is_some()
         || config.channels_config.imessage.is_some()
-        || config.channels_config.matrix.is_some();
+        || config.channels_config.matrix.is_some()
+        || config.channels_config.email.is_some();
 
     if has_channels && config.api_key.is_some() {
         let launch: bool = Confirm::new()
@@ -284,6 +287,7 @@ pub fn run_quick_setup(
         autonomy: AutonomyConfig::default(),
         runtime: RuntimeConfig::default(),
         reliability: crate::config::ReliabilityConfig::default(),
+        model_routes: Vec::new(),
         heartbeat: HeartbeatConfig::default(),
         channels_config: ChannelsConfig::default(),
         memory: memory_config,
@@ -395,9 +399,11 @@ fn default_model_for_provider(provider: &str) -> String {
     match provider {
         "anthropic" => "claude-sonnet-4-20250514".into(),
         "openai" => "gpt-4o".into(),
+        "glm" | "zhipu" | "zai" | "z.ai" => "glm-5".into(),
         "ollama" => "llama3.2".into(),
         "groq" => "llama-3.3-70b-versatile".into(),
         "deepseek" => "deepseek-chat".into(),
+        "gemini" | "google" | "google-gemini" => "gemini-2.0-flash".into(),
         _ => "anthropic/claude-sonnet-4-20250514".into(),
     }
 }
@@ -466,7 +472,7 @@ fn setup_workspace() -> Result<(PathBuf, PathBuf)> {
 fn setup_provider() -> Result<(String, String, String)> {
     // ── Tier selection ──
     let tiers = vec![
-        "⭐ Recommended (OpenRouter, Venice, Anthropic, OpenAI)",
+        "⭐ Recommended (OpenRouter, Venice, Anthropic, OpenAI, Gemini)",
         "⚡ Fast inference (Groq, Fireworks, Together AI)",
         "🌐 Gateway / proxy (Vercel AI, Cloudflare AI, Amazon Bedrock)",
         "🔬 Specialized (Moonshot/Kimi, GLM/Zhipu, MiniMax, Qianfan, Z.AI, Synthetic, OpenCode Zen, Cohere)",
@@ -493,6 +499,10 @@ fn setup_provider() -> Result<(String, String, String)> {
             ("mistral", "Mistral — Large & Codestral"),
             ("xai", "xAI — Grok 3 & 4"),
             ("perplexity", "Perplexity — search-augmented AI"),
+            (
+                "gemini",
+                "Google Gemini — Gemini 2.0 Flash & Pro (supports CLI auth)",
+            ),
         ],
         1 => vec![
             ("groq", "Groq — ultra-fast LPU inference"),
@@ -575,6 +585,53 @@ fn setup_provider() -> Result<(String, String, String)> {
     let api_key = if provider_name == "ollama" {
         print_bullet("Ollama runs locally — no API key needed!");
         String::new()
+    } else if provider_name == "gemini"
+        || provider_name == "google"
+        || provider_name == "google-gemini"
+    {
+        // Special handling for Gemini: check for CLI auth first
+        if crate::providers::gemini::GeminiProvider::has_cli_credentials() {
+            print_bullet(&format!(
+                "{} Gemini CLI credentials detected! You can skip the API key.",
+                style("✓").green().bold()
+            ));
+            print_bullet("ZeroClaw will reuse your existing Gemini CLI authentication.");
+            println!();
+
+            let use_cli: bool = dialoguer::Confirm::new()
+                .with_prompt("  Use existing Gemini CLI authentication?")
+                .default(true)
+                .interact()?;
+
+            if use_cli {
+                println!(
+                    "  {} Using Gemini CLI OAuth tokens",
+                    style("✓").green().bold()
+                );
+                String::new() // Empty key = will use CLI tokens
+            } else {
+                print_bullet("Get your API key at: https://aistudio.google.com/app/apikey");
+                Input::new()
+                    .with_prompt("  Paste your Gemini API key")
+                    .allow_empty(true)
+                    .interact_text()?
+            }
+        } else if std::env::var("GEMINI_API_KEY").is_ok() {
+            print_bullet(&format!(
+                "{} GEMINI_API_KEY environment variable detected!",
+                style("✓").green().bold()
+            ));
+            String::new()
+        } else {
+            print_bullet("Get your API key at: https://aistudio.google.com/app/apikey");
+            print_bullet("Or run `gemini` CLI to authenticate (tokens will be reused).");
+            println!();
+
+            Input::new()
+                .with_prompt("  Paste your Gemini API key (or press Enter to skip)")
+                .allow_empty(true)
+                .interact_text()?
+        }
     } else {
         let key_url = match provider_name {
             "openrouter" => "https://openrouter.ai/keys",
@@ -590,10 +647,13 @@ fn setup_provider() -> Result<(String, String, String)> {
             "xai" => "https://console.x.ai",
             "cohere" => "https://dashboard.cohere.com/api-keys",
             "moonshot" => "https://platform.moonshot.cn/console/api-keys",
+            "glm" | "zhipu" => "https://open.bigmodel.cn/usercenter/proj-mgmt/apikeys",
+            "zai" | "z.ai" => "https://platform.z.ai/",
             "minimax" => "https://www.minimaxi.com/user-center/basic-information",
             "vercel" => "https://vercel.com/account/tokens",
             "cloudflare" => "https://dash.cloudflare.com/profile/api-tokens",
             "bedrock" => "https://console.aws.amazon.com/iam",
+            "gemini" | "google" | "google-gemini" => "https://aistudio.google.com/app/apikey",
             _ => "",
         };
 
@@ -721,7 +781,8 @@ fn setup_provider() -> Result<(String, String, String)> {
             ("moonshot-v1-128k", "Moonshot V1 128K"),
             ("moonshot-v1-32k", "Moonshot V1 32K"),
         ],
-        "glm" => vec![
+        "glm" | "zhipu" | "zai" | "z.ai" => vec![
+            ("glm-5", "GLM-5 (latest)"),
             ("glm-4-plus", "GLM-4 Plus (flagship)"),
             ("glm-4-flash", "GLM-4 Flash (fast)"),
         ],
@@ -734,6 +795,15 @@ fn setup_provider() -> Result<(String, String, String)> {
             ("mistral", "Mistral 7B"),
             ("codellama", "Code Llama"),
             ("phi3", "Phi-3 (small, fast)"),
+        ],
+        "gemini" | "google" | "google-gemini" => vec![
+            ("gemini-2.0-flash", "Gemini 2.0 Flash (fast, recommended)"),
+            (
+                "gemini-2.0-flash-lite",
+                "Gemini 2.0 Flash Lite (fastest, cheapest)",
+            ),
+            ("gemini-1.5-pro", "Gemini 1.5 Pro (best quality)"),
+            ("gemini-1.5-flash", "Gemini 1.5 Flash (balanced)"),
         ],
         _ => vec![("default", "Default model")],
     };
@@ -783,6 +853,7 @@ fn provider_env_var(name: &str) -> &'static str {
         "vercel" | "vercel-ai" => "VERCEL_API_KEY",
         "cloudflare" | "cloudflare-ai" => "CLOUDFLARE_API_KEY",
         "bedrock" | "aws-bedrock" => "AWS_ACCESS_KEY_ID",
+        "gemini" | "google" | "google-gemini" => "GEMINI_API_KEY",
         _ => "API_KEY",
     }
 }
@@ -1051,6 +1122,8 @@ fn setup_channels() -> Result<ChannelsConfig> {
         imessage: None,
         matrix: None,
         whatsapp: None,
+        email: None,
+        irc: None,
     };
 
     loop {
@@ -1104,6 +1177,14 @@ fn setup_channels() -> Result<ChannelsConfig> {
                 }
             ),
             format!(
+                "IRC        {}",
+                if config.irc.is_some() {
+                    "✅ configured"
+                } else {
+                    "— IRC over TLS"
+                }
+            ),
+            format!(
                 "Webhook    {}",
                 if config.webhook.is_some() {
                     "✅ configured"
@@ -1117,7 +1198,7 @@ fn setup_channels() -> Result<ChannelsConfig> {
         let choice = Select::new()
             .with_prompt("  Connect a channel (or Done to continue)")
             .items(&options)
-            .default(7)
+            .default(8)
             .interact()?;
 
         match choice {
@@ -1621,9 +1702,149 @@ fn setup_channels() -> Result<ChannelsConfig> {
                     verify_token: verify_token.trim().to_string(),
                     app_secret: None, // Can be set via ZEROCLAW_WHATSAPP_APP_SECRET env var
                     allowed_numbers,
+                    app_secret: None, // Can be set via ZEROCLAW_WHATSAPP_APP_SECRET env var
                 });
             }
             6 => {
+                // ── IRC ──
+                println!();
+                println!(
+                    "  {} {}",
+                    style("IRC Setup").white().bold(),
+                    style("— IRC over TLS").dim()
+                );
+                print_bullet("IRC connects over TLS to any IRC server");
+                print_bullet("Supports SASL PLAIN and NickServ authentication");
+                println!();
+
+                let server: String = Input::new()
+                    .with_prompt("  IRC server (hostname)")
+                    .interact_text()?;
+
+                if server.trim().is_empty() {
+                    println!("  {} Skipped", style("→").dim());
+                    continue;
+                }
+
+                let port_str: String = Input::new()
+                    .with_prompt("  Port")
+                    .default("6697".into())
+                    .interact_text()?;
+
+                let port: u16 = match port_str.trim().parse() {
+                    Ok(p) => p,
+                    Err(_) => {
+                        println!("  {} Invalid port, using 6697", style("→").dim());
+                        6697
+                    }
+                };
+
+                let nickname: String =
+                    Input::new().with_prompt("  Bot nickname").interact_text()?;
+
+                if nickname.trim().is_empty() {
+                    println!("  {} Skipped — nickname required", style("→").dim());
+                    continue;
+                }
+
+                let channels_str: String = Input::new()
+                    .with_prompt("  Channels to join (comma-separated: #channel1,#channel2)")
+                    .allow_empty(true)
+                    .interact_text()?;
+
+                let channels = if channels_str.trim().is_empty() {
+                    vec![]
+                } else {
+                    channels_str
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect()
+                };
+
+                print_bullet(
+                    "Allowlist nicknames that can interact with the bot (case-insensitive).",
+                );
+                print_bullet("Use '*' to allow anyone (not recommended for production).");
+
+                let users_str: String = Input::new()
+                    .with_prompt("  Allowed nicknames (comma-separated, or * for all)")
+                    .allow_empty(true)
+                    .interact_text()?;
+
+                let allowed_users = if users_str.trim() == "*" {
+                    vec!["*".into()]
+                } else {
+                    users_str
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect()
+                };
+
+                if allowed_users.is_empty() {
+                    print_bullet(
+                        "⚠️  Empty allowlist — only you can interact. Add nicknames above.",
+                    );
+                }
+
+                println!();
+                print_bullet("Optional authentication (press Enter to skip each):");
+
+                let server_password: String = Input::new()
+                    .with_prompt("  Server password (for bouncers like ZNC, leave empty if none)")
+                    .allow_empty(true)
+                    .interact_text()?;
+
+                let nickserv_password: String = Input::new()
+                    .with_prompt("  NickServ password (leave empty if none)")
+                    .allow_empty(true)
+                    .interact_text()?;
+
+                let sasl_password: String = Input::new()
+                    .with_prompt("  SASL PLAIN password (leave empty if none)")
+                    .allow_empty(true)
+                    .interact_text()?;
+
+                let verify_tls: bool = Confirm::new()
+                    .with_prompt("  Verify TLS certificate?")
+                    .default(true)
+                    .interact()?;
+
+                println!(
+                    "  {} IRC configured as {}@{}:{}",
+                    style("✅").green().bold(),
+                    style(&nickname).cyan(),
+                    style(&server).cyan(),
+                    style(port).cyan()
+                );
+
+                config.irc = Some(IrcConfig {
+                    server: server.trim().to_string(),
+                    port,
+                    nickname: nickname.trim().to_string(),
+                    username: None,
+                    channels,
+                    allowed_users,
+                    server_password: if server_password.trim().is_empty() {
+                        None
+                    } else {
+                        Some(server_password.trim().to_string())
+                    },
+                    nickserv_password: if nickserv_password.trim().is_empty() {
+                        None
+                    } else {
+                        Some(nickserv_password.trim().to_string())
+                    },
+                    sasl_password: if sasl_password.trim().is_empty() {
+                        None
+                    } else {
+                        Some(sasl_password.trim().to_string())
+                    },
+                    verify_tls: Some(verify_tls),
+                });
+            }
+            7 => {
                 // ── Webhook ──
                 println!();
                 println!(
@@ -1680,6 +1901,12 @@ fn setup_channels() -> Result<ChannelsConfig> {
     }
     if config.whatsapp.is_some() {
         active.push("WhatsApp");
+    }
+    if config.email.is_some() {
+        active.push("Email");
+    }
+    if config.irc.is_some() {
+        active.push("IRC");
     }
     if config.webhook.is_some() {
         active.push("Webhook");
@@ -2133,7 +2360,8 @@ fn print_summary(config: &Config) {
         || config.channels_config.discord.is_some()
         || config.channels_config.slack.is_some()
         || config.channels_config.imessage.is_some()
-        || config.channels_config.matrix.is_some();
+        || config.channels_config.matrix.is_some()
+        || config.channels_config.email.is_some();
 
     println!();
     println!(
@@ -2194,6 +2422,9 @@ fn print_summary(config: &Config) {
     }
     if config.channels_config.matrix.is_some() {
         channels.push("Matrix");
+    }
+    if config.channels_config.email.is_some() {
+        channels.push("Email");
     }
     if config.channels_config.webhook.is_some() {
         channels.push("Webhook");

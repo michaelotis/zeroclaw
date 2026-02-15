@@ -8,6 +8,7 @@
 // Already-paired tokens are persisted in config so restarts don't require
 // re-pairing.
 
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::sync::Mutex;
 use std::time::Instant;
@@ -18,13 +19,17 @@ const MAX_PAIR_ATTEMPTS: u32 = 5;
 const PAIR_LOCKOUT_SECS: u64 = 300; // 5 minutes
 
 /// Manages pairing state for the gateway.
+///
+/// Bearer tokens are stored as SHA-256 hashes to prevent plaintext exposure
+/// in config files. When a new token is generated, the plaintext is returned
+/// to the client once, and only the hash is retained.
 #[derive(Debug)]
 pub struct PairingGuard {
     /// Whether pairing is required at all.
     require_pairing: bool,
     /// One-time pairing code (generated on startup, consumed on first pair).
-    pairing_code: Option<String>,
-    /// Set of valid bearer tokens (persisted across restarts).
+    pairing_code: Mutex<Option<String>>,
+    /// Set of SHA-256 hashed bearer tokens (persisted across restarts).
     paired_tokens: Mutex<HashSet<String>>,
     /// Brute-force protection: failed attempt counter + lockout time.
     failed_attempts: Mutex<(u32, Option<Instant>)>,
@@ -35,8 +40,21 @@ impl PairingGuard {
     ///
     /// If `require_pairing` is true and no tokens exist yet, a fresh
     /// pairing code is generated and returned via `pairing_code()`.
+    ///
+    /// Existing tokens are accepted in both forms:
+    /// - Plaintext (`zc_...`): hashed on load for backward compatibility
+    /// - Already hashed (64-char hex): stored as-is
     pub fn new(require_pairing: bool, existing_tokens: &[String]) -> Self {
-        let tokens: HashSet<String> = existing_tokens.iter().cloned().collect();
+        let tokens: HashSet<String> = existing_tokens
+            .iter()
+            .map(|t| {
+                if is_token_hash(t) {
+                    t.clone()
+                } else {
+                    hash_token(t)
+                }
+            })
+            .collect();
         let code = if require_pairing && tokens.is_empty() {
             Some(generate_code())
         } else {
@@ -44,15 +62,18 @@ impl PairingGuard {
         };
         Self {
             require_pairing,
-            pairing_code: code,
+            pairing_code: Mutex::new(code),
             paired_tokens: Mutex::new(tokens),
             failed_attempts: Mutex::new((0, None)),
         }
     }
 
     /// The one-time pairing code (only set when no tokens exist yet).
-    pub fn pairing_code(&self) -> Option<&str> {
-        self.pairing_code.as_deref()
+    pub fn pairing_code(&self) -> Option<String> {
+        self.pairing_code
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     /// Whether pairing is required at all.
@@ -79,23 +100,33 @@ impl PairingGuard {
             }
         }
 
-        if let Some(ref expected) = self.pairing_code {
-            if constant_time_eq(code.trim(), expected.trim()) {
-                // Reset failed attempts on success
-                {
-                    let mut attempts = self
-                        .failed_attempts
+        {
+            let mut pairing_code = self
+                .pairing_code
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(ref expected) = *pairing_code {
+                if constant_time_eq(code.trim(), expected.trim()) {
+                    // Reset failed attempts on success
+                    {
+                        let mut attempts = self
+                            .failed_attempts
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        *attempts = (0, None);
+                    }
+                    let token = generate_token();
+                    let mut tokens = self
+                        .paired_tokens
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    *attempts = (0, None);
+                    tokens.insert(hash_token(&token));
+
+                    // Consume the pairing code so it cannot be reused
+                    *pairing_code = None;
+
+                    return Ok(Some(token));
                 }
-                let token = generate_token();
-                let mut tokens = self
-                    .paired_tokens
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                tokens.insert(token.clone());
-                return Ok(Some(token));
             }
         }
 
@@ -114,16 +145,17 @@ impl PairingGuard {
         Ok(None)
     }
 
-    /// Check if a bearer token is valid.
+    /// Check if a bearer token is valid (compares against stored hashes).
     pub fn is_authenticated(&self, token: &str) -> bool {
         if !self.require_pairing {
             return true;
         }
+        let hashed = hash_token(token);
         let tokens = self
             .paired_tokens
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        tokens.contains(token)
+        tokens.contains(&hashed)
     }
 
     /// Returns true if the gateway is already paired (has at least one token).
@@ -135,7 +167,7 @@ impl PairingGuard {
         !tokens.is_empty()
     }
 
-    /// Get all paired tokens (for persisting to config).
+    /// Get all paired token hashes (for persisting to config).
     pub fn tokens(&self) -> Vec<String> {
         let tokens = self
             .paired_tokens
@@ -174,15 +206,38 @@ fn generate_token() -> String {
     format!("zc_{}", uuid::Uuid::new_v4().as_simple())
 }
 
-/// Constant-time string comparison to prevent timing attacks on pairing code.
+/// SHA-256 hash a bearer token for storage. Returns lowercase hex.
+fn hash_token(token: &str) -> String {
+    format!("{:x}", Sha256::digest(token.as_bytes()))
+}
+
+/// Check if a stored value looks like a SHA-256 hash (64 hex chars)
+/// rather than a plaintext token.
+fn is_token_hash(value: &str) -> bool {
+    value.len() == 64 && value.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// Constant-time string comparison to prevent timing attacks.
+///
+/// Does not short-circuit on length mismatch — always iterates over the
+/// longer input to avoid leaking length information via timing.
 pub fn constant_time_eq(a: &str, b: &str) -> bool {
-    if a.len() != b.len() {
-        return false;
+    let a = a.as_bytes();
+    let b = b.as_bytes();
+
+    // Track length mismatch as a usize (non-zero = different lengths)
+    let len_diff = a.len() ^ b.len();
+
+    // XOR each byte, padding the shorter input with zeros.
+    // Iterates over max(a.len(), b.len()) to avoid timing differences.
+    let max_len = a.len().max(b.len());
+    let mut byte_diff = 0u8;
+    for i in 0..max_len {
+        let x = *a.get(i).unwrap_or(&0);
+        let y = *b.get(i).unwrap_or(&0);
+        byte_diff |= x ^ y;
     }
-    a.bytes()
-        .zip(b.bytes())
-        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
-        == 0
+    (len_diff == 0) & (byte_diff == 0)
 }
 
 /// Check if a host string represents a non-localhost bind address.
@@ -246,7 +301,16 @@ mod tests {
 
     #[test]
     fn is_authenticated_with_valid_token() {
+        // Pass plaintext token — PairingGuard hashes it on load
         let guard = PairingGuard::new(true, &["zc_valid".into()]);
+        assert!(guard.is_authenticated("zc_valid"));
+    }
+
+    #[test]
+    fn is_authenticated_with_prehashed_token() {
+        // Pass an already-hashed token (64 hex chars)
+        let hashed = hash_token("zc_valid");
+        let guard = PairingGuard::new(true, &[hashed]);
         assert!(guard.is_authenticated("zc_valid"));
     }
 
@@ -264,11 +328,16 @@ mod tests {
     }
 
     #[test]
-    fn tokens_returns_all_paired() {
-        let guard = PairingGuard::new(true, &["a".into(), "b".into()]);
-        let mut tokens = guard.tokens();
-        tokens.sort();
-        assert_eq!(tokens, vec!["a", "b"]);
+    fn tokens_returns_hashes() {
+        let guard = PairingGuard::new(true, &["zc_a".into(), "zc_b".into()]);
+        let tokens = guard.tokens();
+        assert_eq!(tokens.len(), 2);
+        // Tokens should be stored as 64-char hex hashes, not plaintext
+        for t in &tokens {
+            assert_eq!(t.len(), 64, "Token should be a SHA-256 hash");
+            assert!(t.chars().all(|c| c.is_ascii_hexdigit()));
+            assert!(!t.starts_with("zc_"), "Token should not be plaintext");
+        }
     }
 
     #[test]
@@ -278,6 +347,33 @@ mod tests {
         let token = guard.try_pair(&code).unwrap().unwrap();
         assert!(guard.is_authenticated(&token));
         assert!(!guard.is_authenticated("wrong"));
+    }
+
+    // ── Token hashing ────────────────────────────────────────
+
+    #[test]
+    fn hash_token_produces_64_hex_chars() {
+        let hash = hash_token("zc_test_token");
+        assert_eq!(hash.len(), 64);
+        assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn hash_token_is_deterministic() {
+        assert_eq!(hash_token("zc_abc"), hash_token("zc_abc"));
+    }
+
+    #[test]
+    fn hash_token_differs_for_different_inputs() {
+        assert_ne!(hash_token("zc_a"), hash_token("zc_b"));
+    }
+
+    #[test]
+    fn is_token_hash_detects_hash_vs_plaintext() {
+        assert!(is_token_hash(&hash_token("zc_test")));
+        assert!(!is_token_hash("zc_test_token"));
+        assert!(!is_token_hash("too_short"));
+        assert!(!is_token_hash(""));
     }
 
     // ── is_public_bind ───────────────────────────────────────

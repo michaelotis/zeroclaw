@@ -1,12 +1,14 @@
 pub mod anthropic;
 pub mod compatible;
+pub mod gemini;
 pub mod ollama;
 pub mod openai;
 pub mod openrouter;
 pub mod reliable;
+pub mod router;
 pub mod traits;
 
-pub use traits::Provider;
+pub use traits::{ChatMessage, Provider};
 
 use compatible::{AuthStyle, OpenAiCompatibleProvider};
 use reliable::ReliableProvider;
@@ -89,24 +91,89 @@ pub async fn api_error(provider: &str, response: reqwest::Response) -> anyhow::E
     anyhow::anyhow!("{provider} API error ({status}): {sanitized}")
 }
 
+/// Resolve API key for a provider from config and environment variables.
+///
+/// Resolution order:
+/// 1. Explicitly provided `api_key` parameter (trimmed, filtered if empty)
+/// 2. Provider-specific environment variable (e.g., `ANTHROPIC_OAUTH_TOKEN`, `OPENROUTER_API_KEY`)
+/// 3. Generic fallback variables (`ZEROCLAW_API_KEY`, `API_KEY`)
+///
+/// For Anthropic, the provider-specific env var is `ANTHROPIC_OAUTH_TOKEN` (for setup-tokens)
+/// followed by `ANTHROPIC_API_KEY` (for regular API keys).
+fn resolve_api_key(name: &str, api_key: Option<&str>) -> Option<String> {
+    if let Some(key) = api_key.map(str::trim).filter(|k| !k.is_empty()) {
+        return Some(key.to_string());
+    }
+
+    let provider_env_candidates: Vec<&str> = match name {
+        "anthropic" => vec!["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
+        "openrouter" => vec!["OPENROUTER_API_KEY"],
+        "openai" => vec!["OPENAI_API_KEY"],
+        "venice" => vec!["VENICE_API_KEY"],
+        "groq" => vec!["GROQ_API_KEY"],
+        "mistral" => vec!["MISTRAL_API_KEY"],
+        "deepseek" => vec!["DEEPSEEK_API_KEY"],
+        "xai" | "grok" => vec!["XAI_API_KEY"],
+        "together" | "together-ai" => vec!["TOGETHER_API_KEY"],
+        "fireworks" | "fireworks-ai" => vec!["FIREWORKS_API_KEY"],
+        "perplexity" => vec!["PERPLEXITY_API_KEY"],
+        "cohere" => vec!["COHERE_API_KEY"],
+        "moonshot" | "kimi" => vec!["MOONSHOT_API_KEY"],
+        "glm" | "zhipu" => vec!["GLM_API_KEY"],
+        "minimax" => vec!["MINIMAX_API_KEY"],
+        "qianfan" | "baidu" => vec!["QIANFAN_API_KEY"],
+        "zai" | "z.ai" => vec!["ZAI_API_KEY"],
+        "synthetic" => vec!["SYNTHETIC_API_KEY"],
+        "opencode" | "opencode-zen" => vec!["OPENCODE_API_KEY"],
+        "vercel" | "vercel-ai" => vec!["VERCEL_API_KEY"],
+        "cloudflare" | "cloudflare-ai" => vec!["CLOUDFLARE_API_KEY"],
+        _ => vec![],
+    };
+
+    for env_var in provider_env_candidates {
+        if let Ok(value) = std::env::var(env_var) {
+            let value = value.trim();
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+
+    for env_var in ["ZEROCLAW_API_KEY", "API_KEY"] {
+        if let Ok(value) = std::env::var(env_var) {
+            let value = value.trim();
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+
+    None
+}
+
 /// Factory: create the right provider from config
 #[allow(clippy::too_many_lines)]
 pub fn create_provider(name: &str, api_key: Option<&str>) -> anyhow::Result<Box<dyn Provider>> {
+    let resolved_key = resolve_api_key(name, api_key);
+    let key = resolved_key.as_deref();
     match name {
         // ── Primary providers (custom implementations) ───────
-        "openrouter" => Ok(Box::new(openrouter::OpenRouterProvider::new(api_key))),
-        "anthropic" => Ok(Box::new(anthropic::AnthropicProvider::new(api_key))),
-        "openai" => Ok(Box::new(openai::OpenAiProvider::new(api_key))),
-        "ollama" => Ok(Box::new(ollama::OllamaProvider::new(
-            api_key.filter(|k| !k.is_empty()),
-        ))),
+        "openrouter" => Ok(Box::new(openrouter::OpenRouterProvider::new(key))),
+        "anthropic" => Ok(Box::new(anthropic::AnthropicProvider::new(key))),
+        "openai" => Ok(Box::new(openai::OpenAiProvider::new(key))),
+        // Ollama is a local service that doesn't use API keys.
+        // The api_key parameter is ignored to avoid it being misinterpreted as a base_url.
+        "ollama" => Ok(Box::new(ollama::OllamaProvider::new(None))),
+        "gemini" | "google" | "google-gemini" => {
+            Ok(Box::new(gemini::GeminiProvider::new(key)))
+        }
 
         // ── OpenAI-compatible providers ──────────────────────
         "venice" => Ok(Box::new(OpenAiCompatibleProvider::new(
-            "Venice", "https://api.venice.ai", api_key, AuthStyle::Bearer,
+            "Venice", "https://api.venice.ai", key, AuthStyle::Bearer,
         ))),
         "vercel" | "vercel-ai" => Ok(Box::new(OpenAiCompatibleProvider::new(
-            "Vercel AI Gateway", "https://api.vercel.ai", api_key, AuthStyle::Bearer,
+            "Vercel AI Gateway", "https://api.vercel.ai", key, AuthStyle::Bearer,
         ))),
         "cloudflare" | "cloudflare-ai" => Ok(Box::new(OpenAiCompatibleProvider::new(
             "Cloudflare AI Gateway",
@@ -115,22 +182,22 @@ pub fn create_provider(name: &str, api_key: Option<&str>) -> anyhow::Result<Box<
             AuthStyle::Bearer,
         ))),
         "moonshot" | "kimi" => Ok(Box::new(OpenAiCompatibleProvider::new(
-            "Moonshot", "https://api.moonshot.cn", api_key, AuthStyle::Bearer,
+            "Moonshot", "https://api.moonshot.cn", key, AuthStyle::Bearer,
         ))),
         "synthetic" => Ok(Box::new(OpenAiCompatibleProvider::new(
-            "Synthetic", "https://api.synthetic.com", api_key, AuthStyle::Bearer,
+            "Synthetic", "https://api.synthetic.com", key, AuthStyle::Bearer,
         ))),
         "opencode" | "opencode-zen" => Ok(Box::new(OpenAiCompatibleProvider::new(
-            "OpenCode Zen", "https://api.opencode.ai", api_key, AuthStyle::Bearer,
+            "OpenCode Zen", "https://api.opencode.ai", key, AuthStyle::Bearer,
         ))),
         "zai" | "z.ai" => Ok(Box::new(OpenAiCompatibleProvider::new(
-            "Z.AI", "https://api.z.ai", api_key, AuthStyle::Bearer,
+            "Z.AI", "https://api.z.ai/api/coding/paas/v4", key, AuthStyle::Bearer,
         ))),
         "glm" | "zhipu" => Ok(Box::new(OpenAiCompatibleProvider::new(
-            "GLM", "https://open.bigmodel.cn/api/paas", api_key, AuthStyle::Bearer,
+            "GLM", "https://open.bigmodel.cn/api/paas", key, AuthStyle::Bearer,
         ))),
         "minimax" => Ok(Box::new(OpenAiCompatibleProvider::new(
-            "MiniMax", "https://api.minimax.chat", api_key, AuthStyle::Bearer,
+            "MiniMax", "https://api.minimax.chat", key, AuthStyle::Bearer,
         ))),
         "bedrock" | "aws-bedrock" => Ok(Box::new(OpenAiCompatibleProvider::new(
             "Amazon Bedrock",
@@ -139,33 +206,36 @@ pub fn create_provider(name: &str, api_key: Option<&str>) -> anyhow::Result<Box<
             AuthStyle::Bearer,
         ))),
         "qianfan" | "baidu" => Ok(Box::new(OpenAiCompatibleProvider::new(
-            "Qianfan", "https://aip.baidubce.com", api_key, AuthStyle::Bearer,
+            "Qianfan", "https://aip.baidubce.com", key, AuthStyle::Bearer,
         ))),
 
         // ── Extended ecosystem (community favorites) ─────────
         "groq" => Ok(Box::new(OpenAiCompatibleProvider::new(
-            "Groq", "https://api.groq.com/openai", api_key, AuthStyle::Bearer,
+            "Groq", "https://api.groq.com/openai", key, AuthStyle::Bearer,
         ))),
         "mistral" => Ok(Box::new(OpenAiCompatibleProvider::new(
-            "Mistral", "https://api.mistral.ai", api_key, AuthStyle::Bearer,
+            "Mistral", "https://api.mistral.ai", key, AuthStyle::Bearer,
         ))),
         "xai" | "grok" => Ok(Box::new(OpenAiCompatibleProvider::new(
-            "xAI", "https://api.x.ai", api_key, AuthStyle::Bearer,
+            "xAI", "https://api.x.ai", key, AuthStyle::Bearer,
         ))),
         "deepseek" => Ok(Box::new(OpenAiCompatibleProvider::new(
-            "DeepSeek", "https://api.deepseek.com", api_key, AuthStyle::Bearer,
+            "DeepSeek", "https://api.deepseek.com", key, AuthStyle::Bearer,
         ))),
         "together" | "together-ai" => Ok(Box::new(OpenAiCompatibleProvider::new(
-            "Together AI", "https://api.together.xyz", api_key, AuthStyle::Bearer,
+            "Together AI", "https://api.together.xyz", key, AuthStyle::Bearer,
         ))),
         "fireworks" | "fireworks-ai" => Ok(Box::new(OpenAiCompatibleProvider::new(
-            "Fireworks AI", "https://api.fireworks.ai/inference", api_key, AuthStyle::Bearer,
+            "Fireworks AI", "https://api.fireworks.ai/inference", key, AuthStyle::Bearer,
         ))),
         "perplexity" => Ok(Box::new(OpenAiCompatibleProvider::new(
-            "Perplexity", "https://api.perplexity.ai", api_key, AuthStyle::Bearer,
+            "Perplexity", "https://api.perplexity.ai", key, AuthStyle::Bearer,
         ))),
         "cohere" => Ok(Box::new(OpenAiCompatibleProvider::new(
-            "Cohere", "https://api.cohere.com/compatibility", api_key, AuthStyle::Bearer,
+            "Cohere", "https://api.cohere.com/compatibility", key, AuthStyle::Bearer,
+        ))),
+        "copilot" | "github-copilot" => Ok(Box::new(OpenAiCompatibleProvider::new(
+            "GitHub Copilot", "https://api.githubcopilot.com", key, AuthStyle::Bearer,
         ))),
 
         // ── Bring Your Own Provider (custom URL) ───────────
@@ -178,14 +248,27 @@ pub fn create_provider(name: &str, api_key: Option<&str>) -> anyhow::Result<Box<
             Ok(Box::new(OpenAiCompatibleProvider::new(
                 "Custom",
                 base_url,
-                api_key,
+                key,
                 AuthStyle::Bearer,
+            )))
+        }
+
+        // ── Anthropic-compatible custom endpoints ───────────
+        // Format: "anthropic-custom:https://your-api.com"
+        name if name.starts_with("anthropic-custom:") => {
+            let base_url = name.strip_prefix("anthropic-custom:").unwrap_or("");
+            if base_url.is_empty() {
+                anyhow::bail!("Anthropic-custom provider requires a URL. Format: anthropic-custom:https://your-api.com");
+            }
+            Ok(Box::new(anthropic::AnthropicProvider::with_base_url(
+                key, Some(base_url),
             )))
         }
 
         _ => anyhow::bail!(
             "Unknown provider: {name}. Check README for supported providers or run `zeroclaw onboard --interactive` to reconfigure.\n\
-             Tip: Use \"custom:https://your-api.com\" for any OpenAI-compatible endpoint."
+             Tip: Use \"custom:https://your-api.com\" for OpenAI-compatible endpoints.\n\
+             Tip: Use \"anthropic-custom:https://your-api.com\" for Anthropic-compatible endpoints."
         ),
     }
 }
@@ -208,6 +291,15 @@ pub fn create_resilient_provider(
             continue;
         }
 
+        if api_key.is_some() && fallback != "ollama" {
+            tracing::warn!(
+                fallback_provider = fallback,
+                primary_provider = primary_name,
+                "Fallback provider will use the primary provider's API key — \
+                 this will fail if the providers require different keys"
+            );
+        }
+
         match create_provider(fallback, api_key) {
             Ok(provider) => providers.push((fallback.clone(), provider)),
             Err(e) => {
@@ -223,6 +315,71 @@ pub fn create_resilient_provider(
         providers,
         reliability.provider_retries,
         reliability.provider_backoff_ms,
+    )))
+}
+
+/// Create a RouterProvider if model routes are configured, otherwise return a
+/// standard resilient provider. The router wraps individual providers per route,
+/// each with its own retry/fallback chain.
+pub fn create_routed_provider(
+    primary_name: &str,
+    api_key: Option<&str>,
+    reliability: &crate::config::ReliabilityConfig,
+    model_routes: &[crate::config::ModelRouteConfig],
+    default_model: &str,
+) -> anyhow::Result<Box<dyn Provider>> {
+    if model_routes.is_empty() {
+        return create_resilient_provider(primary_name, api_key, reliability);
+    }
+
+    // Collect unique provider names needed
+    let mut needed: Vec<String> = vec![primary_name.to_string()];
+    for route in model_routes {
+        if !needed.iter().any(|n| n == &route.provider) {
+            needed.push(route.provider.clone());
+        }
+    }
+
+    // Create each provider (with its own resilience wrapper)
+    let mut providers: Vec<(String, Box<dyn Provider>)> = Vec::new();
+    for name in &needed {
+        let key = model_routes
+            .iter()
+            .find(|r| &r.provider == name)
+            .and_then(|r| r.api_key.as_deref())
+            .or(api_key);
+        match create_resilient_provider(name, key, reliability) {
+            Ok(provider) => providers.push((name.clone(), provider)),
+            Err(e) => {
+                if name == primary_name {
+                    return Err(e);
+                }
+                tracing::warn!(
+                    provider = name.as_str(),
+                    "Ignoring routed provider that failed to create: {e}"
+                );
+            }
+        }
+    }
+
+    // Build route table
+    let routes: Vec<(String, router::Route)> = model_routes
+        .iter()
+        .map(|r| {
+            (
+                r.hint.clone(),
+                router::Route {
+                    provider_name: r.provider.clone(),
+                    model: r.model.clone(),
+                },
+            )
+        })
+        .collect();
+
+    Ok(Box::new(router::RouterProvider::new(
+        providers,
+        routes,
+        default_model.to_string(),
     )))
 }
 
@@ -251,6 +408,18 @@ mod tests {
     #[test]
     fn factory_ollama() {
         assert!(create_provider("ollama", None).is_ok());
+        // Ollama ignores the api_key parameter since it's a local service
+        assert!(create_provider("ollama", Some("dummy")).is_ok());
+        assert!(create_provider("ollama", Some("any-value-here")).is_ok());
+    }
+
+    #[test]
+    fn factory_gemini() {
+        assert!(create_provider("gemini", Some("test-key")).is_ok());
+        assert!(create_provider("google", Some("test-key")).is_ok());
+        assert!(create_provider("google-gemini", Some("test-key")).is_ok());
+        // Should also work without key (will try CLI auth)
+        assert!(create_provider("gemini", None).is_ok());
     }
 
     // ── OpenAI-compatible providers ──────────────────────────
@@ -363,6 +532,12 @@ mod tests {
         assert!(create_provider("cohere", Some("key")).is_ok());
     }
 
+    #[test]
+    fn factory_copilot() {
+        assert!(create_provider("copilot", Some("key")).is_ok());
+        assert!(create_provider("github-copilot", Some("key")).is_ok());
+    }
+
     // ── Custom / BYOP provider ─────────────────────────────
 
     #[test]
@@ -391,6 +566,37 @@ mod tests {
                 "Expected 'requires a URL', got: {e}"
             ),
             Ok(_) => panic!("Expected error for empty custom URL"),
+        }
+    }
+
+    // ── Anthropic-compatible custom endpoints ─────────────────
+
+    #[test]
+    fn factory_anthropic_custom_url() {
+        let p = create_provider("anthropic-custom:https://api.example.com", Some("key"));
+        assert!(p.is_ok());
+    }
+
+    #[test]
+    fn factory_anthropic_custom_trailing_slash() {
+        let p = create_provider("anthropic-custom:https://api.example.com/", Some("key"));
+        assert!(p.is_ok());
+    }
+
+    #[test]
+    fn factory_anthropic_custom_no_key() {
+        let p = create_provider("anthropic-custom:https://api.example.com", None);
+        assert!(p.is_ok());
+    }
+
+    #[test]
+    fn factory_anthropic_custom_empty_url_errors() {
+        match create_provider("anthropic-custom:", None) {
+            Err(e) => assert!(
+                e.to_string().contains("requires a URL"),
+                "Expected 'requires a URL', got: {e}"
+            ),
+            Ok(_) => panic!("Expected error for empty anthropic-custom URL"),
         }
     }
 
@@ -445,6 +651,7 @@ mod tests {
             "anthropic",
             "openai",
             "ollama",
+            "gemini",
             "venice",
             "vercel",
             "cloudflare",
@@ -464,6 +671,7 @@ mod tests {
             "fireworks",
             "perplexity",
             "cohere",
+            "copilot",
         ];
         for name in providers {
             assert!(

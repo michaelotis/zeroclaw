@@ -153,6 +153,8 @@ where
                 Ok(()) => {
                     crate::health::mark_component_error(name, "component exited unexpectedly");
                     tracing::warn!("Daemon component '{name}' exited unexpectedly");
+                    // Clean exit — reset backoff since the component ran successfully
+                    backoff = initial_backoff_secs.max(1);
                 }
                 Err(e) => {
                     crate::health::mark_component_error(name, e.to_string());
@@ -162,6 +164,7 @@ where
 
             crate::health::bump_component_restart(name);
             tokio::time::sleep(Duration::from_secs(backoff)).await;
+            // Double backoff AFTER sleeping so first error uses initial_backoff
             backoff = backoff.saturating_mul(2).min(max_backoff);
         }
     })
@@ -207,6 +210,8 @@ fn has_supervised_channels(config: &Config) -> bool {
         || config.channels_config.slack.is_some()
         || config.channels_config.imessage.is_some()
         || config.channels_config.matrix.is_some()
+        || config.channels_config.whatsapp.is_some()
+        || config.channels_config.email.is_some()
 }
 
 #[cfg(test)]
@@ -215,9 +220,11 @@ mod tests {
     use tempfile::TempDir;
 
     fn test_config(tmp: &TempDir) -> Config {
-        let mut config = Config::default();
-        config.workspace_dir = tmp.path().join("workspace");
-        config.config_path = tmp.path().join("config.toml");
+        let config = Config {
+            workspace_dir: tmp.path().join("workspace"),
+            config_path: tmp.path().join("config.toml"),
+            ..Config::default()
+        };
         std::fs::create_dir_all(&config.workspace_dir).unwrap();
         config
     }

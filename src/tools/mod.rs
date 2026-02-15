@@ -3,9 +3,11 @@ pub mod browser_open;
 pub mod composio;
 pub mod file_read;
 pub mod file_write;
+pub mod image_info;
 pub mod memory_forget;
 pub mod memory_recall;
 pub mod memory_store;
+pub mod screenshot;
 pub mod shell;
 pub mod traits;
 
@@ -14,22 +16,33 @@ pub use browser_open::BrowserOpenTool;
 pub use composio::ComposioTool;
 pub use file_read::FileReadTool;
 pub use file_write::FileWriteTool;
+pub use image_info::ImageInfoTool;
 pub use memory_forget::MemoryForgetTool;
 pub use memory_recall::MemoryRecallTool;
 pub use memory_store::MemoryStoreTool;
+pub use screenshot::ScreenshotTool;
 pub use shell::ShellTool;
 pub use traits::Tool;
 #[allow(unused_imports)]
 pub use traits::{ToolResult, ToolSpec};
 
 use crate::memory::Memory;
+use crate::runtime::{NativeRuntime, RuntimeAdapter};
 use crate::security::SecurityPolicy;
 use std::sync::Arc;
 
 /// Create the default tool registry
 pub fn default_tools(security: Arc<SecurityPolicy>) -> Vec<Box<dyn Tool>> {
+    default_tools_with_runtime(security, Arc::new(NativeRuntime::new()))
+}
+
+/// Create the default tool registry with explicit runtime adapter.
+pub fn default_tools_with_runtime(
+    security: Arc<SecurityPolicy>,
+    runtime: Arc<dyn RuntimeAdapter>,
+) -> Vec<Box<dyn Tool>> {
     vec![
-        Box::new(ShellTool::new(security.clone())),
+        Box::new(ShellTool::new(security.clone(), runtime)),
         Box::new(FileReadTool::new(security.clone())),
         Box::new(FileWriteTool::new(security)),
     ]
@@ -42,8 +55,25 @@ pub fn all_tools(
     composio_key: Option<&str>,
     browser_config: &crate::config::BrowserConfig,
 ) -> Vec<Box<dyn Tool>> {
+    all_tools_with_runtime(
+        security,
+        Arc::new(NativeRuntime::new()),
+        memory,
+        composio_key,
+        browser_config,
+    )
+}
+
+/// Create full tool registry including memory tools and optional Composio.
+pub fn all_tools_with_runtime(
+    security: &Arc<SecurityPolicy>,
+    runtime: Arc<dyn RuntimeAdapter>,
+    memory: Arc<dyn Memory>,
+    composio_key: Option<&str>,
+    browser_config: &crate::config::BrowserConfig,
+) -> Vec<Box<dyn Tool>> {
     let mut tools: Vec<Box<dyn Tool>> = vec![
-        Box::new(ShellTool::new(security.clone())),
+        Box::new(ShellTool::new(security.clone(), runtime)),
         Box::new(FileReadTool::new(security.clone())),
         Box::new(FileWriteTool::new(security.clone())),
         Box::new(MemoryStoreTool::new(memory.clone())),
@@ -64,6 +94,10 @@ pub fn all_tools(
             browser_config.session_name.clone(),
         )));
     }
+
+    // Vision tools are always available
+    tools.push(Box::new(ScreenshotTool::new(security.clone())));
+    tools.push(Box::new(ImageInfoTool::new(security.clone())));
 
     if let Some(key) = composio_key {
         if !key.is_empty() {

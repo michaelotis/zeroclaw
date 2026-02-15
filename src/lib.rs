@@ -23,6 +23,7 @@ pub mod doctor;
 pub mod gateway;
 pub mod health;
 pub mod heartbeat;
+pub mod identity;
 pub mod integrations;
 pub mod memory;
 pub mod migration;
@@ -35,6 +36,9 @@ pub mod service;
 pub mod skills;
 pub mod tools;
 pub mod tunnel;
+pub mod util;
+
+pub use config::Config;
 
 /// Service management subcommands
 #[derive(Subcommand, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
