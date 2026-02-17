@@ -1,3 +1,4 @@
+pub mod clawfoundry;
 pub mod log;
 pub mod multi;
 pub mod noop;
@@ -12,6 +13,7 @@ pub mod verbose;
 pub use self::log::LogObserver;
 #[allow(unused_imports)]
 pub use self::multi::MultiObserver;
+pub use clawfoundry::ClawFoundryObserver;
 pub use noop::NoopObserver;
 #[cfg(feature = "observability-otel")]
 pub use otel::OtelObserver;
@@ -25,6 +27,7 @@ use crate::config::ObservabilityConfig;
 /// Factory: create the right observer from config
 pub fn create_observer(config: &ObservabilityConfig) -> Box<dyn Observer> {
     match config.backend.as_str() {
+        "clawfoundry" => Box::new(ClawFoundryObserver::new()),
         "log" => Box::new(LogObserver::new()),
         "prometheus" => Box::new(PrometheusObserver::new()),
         "otel" | "opentelemetry" | "otlp" => {

@@ -17,6 +17,7 @@
 
 pub mod browser;
 pub mod browser_open;
+pub mod clawfoundry;
 pub mod cli_discovery;
 pub mod composio;
 pub mod content_search;
@@ -323,7 +324,12 @@ pub fn all_tools_with_runtime(
         tool_arcs.push(Arc::new(delegate_tool));
     }
 
-    boxed_registry_from_arcs(tool_arcs)
+    let mut tools = boxed_registry_from_arcs(tool_arcs);
+
+    // Add ClawFoundry survival tools when orchestrator env vars are set
+    tools.extend(clawfoundry::clawfoundry_tools());
+
+    tools
 }
 
 #[cfg(test)]
