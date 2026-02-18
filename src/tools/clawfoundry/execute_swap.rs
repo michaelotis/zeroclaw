@@ -4,7 +4,7 @@ use serde_json::json;
 use crate::tools::traits::{Tool, ToolResult};
 use super::{ClawFoundryConfig, call_orchestrator};
 
-/// Execute a token swap via the orchestrator's DEX integration.
+/// Execute a token swap via the orchestrator's 0x aggregator integration.
 pub struct ExecuteSwapTool {
     config: ClawFoundryConfig,
 }
@@ -22,50 +22,51 @@ impl Tool for ExecuteSwapTool {
     }
 
     fn description(&self) -> &str {
-        "Execute a token swap on-chain via the orchestrator. Specify the input token, \
-         output token, amount, and optional max slippage. The orchestrator enforces \
-         guardrails (max 5% slippage, position limits). This is a real financial action \
-         — use with caution and only after analyzing the trade."
+        "Execute a token swap on-chain via the 0x aggregator. Routes across all Base \
+         DEXes (Uniswap V2/V3/V4, Aerodrome, Curve, etc.) for best execution. \
+         Specify the sell token, buy token, amount, and optional max slippage. \
+         The orchestrator enforces guardrails (max 5% slippage, 20% position limits, \
+         gas reserve). This is a real financial action — use with caution."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
-                "tokenIn": {
+                "sellToken": {
                     "type": "string",
-                    "description": "Address of the token to sell."
+                    "description": "Address of the token to sell (use 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE for native ETH)."
                 },
-                "tokenOut": {
+                "buyToken": {
                     "type": "string",
-                    "description": "Address of the token to buy."
+                    "description": "Address of the token to buy (use 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE for native ETH)."
                 },
-                "amountIn": {
+                "sellAmount": {
                     "type": "string",
-                    "description": "Amount of tokenIn to swap (in human-readable format, e.g. '0.1')."
+                    "description": "Amount of sellToken to swap (in human-readable format, e.g. '0.1')."
                 },
                 "maxSlippageBps": {
                     "type": "number",
                     "description": "Maximum allowed slippage in basis points (100 = 1%). Default: 100. Max: 500."
                 }
             },
-            "required": ["tokenIn", "tokenOut", "amountIn"]
+            "required": ["sellToken", "buyToken", "sellAmount"]
         })
     }
 
     async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
-        let token_in = args.get("tokenIn").and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("tokenIn is required"))?;
-        let token_out = args.get("tokenOut").and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("tokenOut is required"))?;
-        let amount_in = args.get("amountIn").and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("amountIn is required"))?;
+        let sell_token = args.get("sellToken").and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("sellToken is required"))?;
+        let buy_token = args.get("buyToken").and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("buyToken is required"))?;
+        let sell_amount = args.get("sellAmount").and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("sellAmount is required"))?;
         let slippage = args.get("maxSlippageBps").and_then(|v| v.as_u64());
 
         let mut body = json!({
-            "tokenIn": token_in,
-            "tokenOut": token_out,
-            "amountIn": amount_in,
+            "sellToken": sell_token,
+            "buyToken": buy_token,
+            "sellAmount": sell_amount,
         });
 
         if let Some(s) = slippage {
@@ -78,14 +79,26 @@ impl Tool for ExecuteSwapTool {
                 let data = &response["data"];
 
                 if success {
+                    let route_info = data["route"].as_array()
+                        .map(|fills| fills.iter()
+                            .filter_map(|f| f["source"].as_str())
+                            .collect::<Vec<_>>()
+                            .join(", "))
+                        .unwrap_or_else(|| "unknown".to_string());
+
                     let output = format!(
-                        "Swap executed:\n\
-                         {} → {}\n\
-                         Amount In: {}\n\
+                        "Swap executed via 0x:\n\
+                         Sell: {} {}\n\
+                         Buy: {} (got {})\n\
+                         Route: {}\n\
+                         Tx: {}\n\
                          Status: {}",
-                        data["tokenIn"].as_str().unwrap_or("?"),
-                        data["tokenOut"].as_str().unwrap_or("?"),
-                        data["amountIn"].as_str().unwrap_or("?"),
+                        data["sellAmount"].as_str().unwrap_or("?"),
+                        data["sellToken"].as_str().unwrap_or("?"),
+                        data["buyToken"].as_str().unwrap_or("?"),
+                        data["buyAmount"].as_str().unwrap_or("?"),
+                        route_info,
+                        data["txHash"].as_str().unwrap_or("?"),
                         data["status"].as_str().unwrap_or("unknown"),
                     );
                     Ok(ToolResult {
