@@ -23,6 +23,7 @@ mod execute_swap;
 mod request_tool;
 mod platform_feedback;
 mod publish_thought;
+mod harvest_yield;
 
 pub use check_balance::CheckBalanceTool;
 pub use check_kill_switch::CheckKillSwitchTool;
@@ -31,6 +32,7 @@ pub use execute_swap::ExecuteSwapTool;
 pub use request_tool::RequestToolTool;
 pub use platform_feedback::PlatformFeedbackTool;
 pub use publish_thought::PublishThoughtTool;
+pub use harvest_yield::HarvestYieldTool;
 
 use super::traits::Tool;
 
@@ -76,7 +78,8 @@ pub fn clawfoundry_tools() -> Vec<Box<dyn Tool>> {
         Box::new(ExecuteSwapTool::new(config.clone())),
         Box::new(RequestToolTool::new(config.clone())),
         Box::new(PlatformFeedbackTool::new(config.clone())),
-        Box::new(PublishThoughtTool::new(config)),
+        Box::new(PublishThoughtTool::new(config.clone())),
+        Box::new(HarvestYieldTool::new(config)),
     ]
 }
 
@@ -139,7 +142,7 @@ mod tests {
         std::env::set_var("CLAWFOUNDRY_TOKEN", "0x1234");
 
         let tools = clawfoundry_tools();
-        assert_eq!(tools.len(), 6);
+        assert_eq!(tools.len(), 8);
 
         for tool in &tools {
             let spec = tool.spec();
