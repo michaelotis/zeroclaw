@@ -79,6 +79,7 @@ mod security;
 mod service;
 mod skillforge;
 mod skills;
+mod survival;
 mod tools;
 mod tunnel;
 mod util;

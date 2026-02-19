@@ -87,9 +87,27 @@ pub async fn run(config: Config, host: String, port: u16) -> Result<()> {
         tracing::info!("Cron disabled; scheduler supervisor not started");
     }
 
+    // ── ClawFoundry Survival Loop (autonomous observe→think→act→remember) ──
+    if config.survival.enabled {
+        let survival_cfg = config.clone();
+        handles.push(spawn_component_supervisor(
+            "survival",
+            initial_backoff,
+            max_backoff,
+            move || {
+                let cfg = survival_cfg.clone();
+                async move { crate::survival::run(cfg).await }
+            },
+        ));
+    } else {
+        crate::health::mark_component_ok("survival");
+        tracing::info!("Survival loop disabled (not a ClawFoundry agent)");
+    }
+
     println!("🧠 ZeroClaw daemon started");
     println!("   Gateway:  http://{host}:{port}");
-    println!("   Components: gateway, channels, heartbeat, scheduler");
+    println!("   Components: gateway, channels, heartbeat, scheduler{}", 
+        if config.survival.enabled { ", survival" } else { "" });
     println!("   Ctrl+C to stop");
 
     tokio::signal::ctrl_c().await?;

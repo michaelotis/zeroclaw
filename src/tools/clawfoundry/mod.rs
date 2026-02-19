@@ -22,6 +22,7 @@ mod analyze_token;
 mod execute_swap;
 mod request_tool;
 mod platform_feedback;
+mod publish_thought;
 
 pub use check_balance::CheckBalanceTool;
 pub use check_kill_switch::CheckKillSwitchTool;
@@ -29,6 +30,7 @@ pub use analyze_token::AnalyzeTokenTool;
 pub use execute_swap::ExecuteSwapTool;
 pub use request_tool::RequestToolTool;
 pub use platform_feedback::PlatformFeedbackTool;
+pub use publish_thought::PublishThoughtTool;
 
 use super::traits::Tool;
 
@@ -73,7 +75,8 @@ pub fn clawfoundry_tools() -> Vec<Box<dyn Tool>> {
         Box::new(AnalyzeTokenTool::new(config.clone())),
         Box::new(ExecuteSwapTool::new(config.clone())),
         Box::new(RequestToolTool::new(config.clone())),
-        Box::new(PlatformFeedbackTool::new(config)),
+        Box::new(PlatformFeedbackTool::new(config.clone())),
+        Box::new(PublishThoughtTool::new(config)),
     ]
 }
 

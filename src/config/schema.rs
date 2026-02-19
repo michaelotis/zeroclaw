@@ -207,6 +207,10 @@ pub struct Config {
     /// Voice transcription configuration (Whisper API via Groq).
     #[serde(default)]
     pub transcription: TranscriptionConfig,
+
+    /// ClawFoundry survival loop configuration.
+    #[serde(default)]
+    pub survival: crate::survival::SurvivalConfig,
 }
 
 // ── Delegate Agents ──────────────────────────────────────────────
@@ -3463,6 +3467,7 @@ impl Default for Config {
             hardware: HardwareConfig::default(),
             query_classification: QueryClassificationConfig::default(),
             transcription: TranscriptionConfig::default(),
+            survival: crate::survival::SurvivalConfig::default(),
         }
     }
 }
