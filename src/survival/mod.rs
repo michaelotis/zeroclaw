@@ -188,7 +188,7 @@ async fn gather_observations(cf: &ClawFoundryConfig) -> Result<Observations> {
             .as_str()
             .unwrap_or("unknown")
             .to_string(),
-        market_cap: ks_data["lastMarketCap"]
+        market_cap: ks_data["currentMarketCap"]
             .as_str()
             .unwrap_or("unknown")
             .to_string(),

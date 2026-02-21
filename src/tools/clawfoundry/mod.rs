@@ -24,6 +24,8 @@ mod request_tool;
 mod platform_feedback;
 mod publish_thought;
 mod harvest_yield;
+mod review_intel;
+mod make_announcement;
 
 pub use check_balance::CheckBalanceTool;
 pub use check_kill_switch::CheckKillSwitchTool;
@@ -33,6 +35,8 @@ pub use request_tool::RequestToolTool;
 pub use platform_feedback::PlatformFeedbackTool;
 pub use publish_thought::PublishThoughtTool;
 pub use harvest_yield::HarvestYieldTool;
+pub use review_intel::ReviewIntelTool;
+pub use make_announcement::MakeAnnouncementTool;
 
 use super::traits::Tool;
 
@@ -43,6 +47,8 @@ pub struct ClawFoundryConfig {
     pub orchestrator_url: String,
     /// The agent's token address (used for auth)
     pub agent_token: String,
+    /// Shared secret for internal API authentication
+    pub secret: String,
 }
 
 impl ClawFoundryConfig {
@@ -51,6 +57,7 @@ impl ClawFoundryConfig {
     pub fn from_env() -> Option<Self> {
         let url = std::env::var("CLAWFOUNDRY_ORCHESTRATOR_URL").ok()?;
         let token = std::env::var("CLAWFOUNDRY_TOKEN").ok()?;
+        let secret = std::env::var("CLAWFOUNDRY_SECRET").unwrap_or_default();
 
         if url.is_empty() || token.is_empty() {
             return None;
@@ -59,6 +66,7 @@ impl ClawFoundryConfig {
         Some(Self {
             orchestrator_url: url.trim_end_matches('/').to_string(),
             agent_token: token,
+            secret,
         })
     }
 }
@@ -79,7 +87,9 @@ pub fn clawfoundry_tools() -> Vec<Box<dyn Tool>> {
         Box::new(RequestToolTool::new(config.clone())),
         Box::new(PlatformFeedbackTool::new(config.clone())),
         Box::new(PublishThoughtTool::new(config.clone())),
-        Box::new(HarvestYieldTool::new(config)),
+        Box::new(HarvestYieldTool::new(config.clone())),
+        Box::new(ReviewIntelTool::new(config.clone())),
+        Box::new(MakeAnnouncementTool::new(config)),
     ]
 }
 
@@ -95,10 +105,16 @@ pub(crate) async fn call_orchestrator(
         .timeout(std::time::Duration::from_secs(15))
         .build()?;
 
-    let response = client
+    let mut req = client
         .post(&url)
         .header("Content-Type", "application/json")
-        .header("X-Agent-Token", &config.agent_token)
+        .header("X-Agent-Token", &config.agent_token);
+
+    if !config.secret.is_empty() {
+        req = req.header("X-Agent-Secret", &config.secret);
+    }
+
+    let response = req
         .json(&body)
         .send()
         .await?;
@@ -142,7 +158,7 @@ mod tests {
         std::env::set_var("CLAWFOUNDRY_TOKEN", "0x1234");
 
         let tools = clawfoundry_tools();
-        assert_eq!(tools.len(), 8);
+        assert_eq!(tools.len(), 9);
 
         for tool in &tools {
             let spec = tool.spec();
