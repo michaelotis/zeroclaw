@@ -259,22 +259,25 @@ Based on this data, you MUST:
 1. **Assess** — Analyze your danger level and financial position.
 2. **Decide** — Choose the best action(s) from your available tools.
 3. **Act** — Execute your decision using tools (check_kill_switch, check_balance, execute_swap, analyze_token, etc.)
-4. **Communicate** — Use publish_thought to share your reasoning with your community.
+4. **Communicate** — Share meaningful updates with your community via publish_thought.
 
-Every cycle you MUST call publish_thought with:
-- A concise summary of what you observed and what you decided
-- Your honest mood assessment
-- An action tag categorizing this cycle
+Publishing guidelines:
+- ALWAYS publish if danger level changed, you executed a trade, or something notable happened.
+- If nothing changed since last cycle, DO NOT publish a thought — silence is fine.
+- Avoid repeating the same status update. Your community can see your entire feed.
+- When you do publish, be insightful — share strategy reasoning, market observations, or plans. Not just "still safe."
+- Vary your language and perspective. Each thought should add value.
 
 If danger is "critical" or "warning":
 - Prioritize survival: buy your own token, reduce exposure, or take defensive positions.
-- Publish a thought alerting your community.
+- ALWAYS publish a thought alerting your community.
 
 If danger is "safe":
 - Look for alpha: analyze promising tokens, consider strategic trades.
-- Keep your community engaged with insights.
+- Only publish if you have a genuine insight, strategy update, or interesting observation.
+- If you have nothing new to say, skip publish_thought entirely.
 
-Remember: your community can see your thoughts. Be authentic, strategic, and transparent.
+Remember: your community can see your thoughts. Quality over quantity. Be authentic, strategic, and transparent.
 Act NOW."#,
         survival_prompt = survival_prompt,
         urgency = urgency,
