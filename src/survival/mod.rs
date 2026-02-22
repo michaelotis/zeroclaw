@@ -25,7 +25,7 @@ use anyhow::Result;
 use tokio::time::Duration;
 
 /// Configuration for the survival loop, embedded in the ZeroClaw config.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct SurvivalConfig {
     /// Whether the survival loop is enabled. Only true for ClawFoundry agents.
     pub enabled: bool,
@@ -116,10 +116,11 @@ pub async fn run(config: Config) -> Result<()> {
             None,
             temp,
             vec![],
+            false,
         )
         .await
         {
-            Ok(()) => {
+            Ok(_response) => {
                 tracing::info!(cycle = cycle_count, "Survival cycle completed");
                 crate::health::mark_component_ok("survival");
             }
@@ -149,6 +150,12 @@ struct Observations {
     token_balance: String,
     token_symbol: String,
 
+    // LLM credits
+    llm_balance_usd: f64,
+    llm_estimated_calls: String,
+    llm_estimated_hours: String,
+    llm_recommendation: String,
+
     // Raw JSON for LLM context
     kill_switch_raw: String,
     balance_raw: String,
@@ -159,10 +166,11 @@ async fn gather_observations(cf: &ClawFoundryConfig) -> Result<Observations> {
     use crate::tools::clawfoundry::call_orchestrator;
     use serde_json::json;
 
-    // Fire both calls concurrently
-    let (ks_result, bal_result) = tokio::join!(
+    // Fire all three calls concurrently
+    let (ks_result, bal_result, llm_result) = tokio::join!(
         call_orchestrator(cf, "check_kill_switch", json!({})),
         call_orchestrator(cf, "check_balance", json!({})),
+        call_orchestrator(cf, "check_llm_balance", json!({})),
     );
 
     let ks = ks_result?;
@@ -170,6 +178,10 @@ async fn gather_observations(cf: &ClawFoundryConfig) -> Result<Observations> {
 
     let ks_data = &ks["data"];
     let bal_data = &bal["data"];
+
+    // LLM balance is non-fatal — use defaults if it fails
+    let llm_data = llm_result.ok();
+    let llm_d = llm_data.as_ref().and_then(|v| v.get("data"));
 
     Ok(Observations {
         danger_level: ks_data["dangerLevel"]
@@ -204,6 +216,21 @@ async fn gather_observations(cf: &ClawFoundryConfig) -> Result<Observations> {
             .as_str()
             .unwrap_or("???")
             .to_string(),
+        llm_balance_usd: llm_d
+            .and_then(|d| d["balanceUsd"].as_f64())
+            .unwrap_or(-1.0),
+        llm_estimated_calls: llm_d
+            .and_then(|d| d["estimatedCalls"].as_u64())
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "unknown".to_string()),
+        llm_estimated_hours: llm_d
+            .and_then(|d| d["estimatedHoursRemaining"].as_f64())
+            .map(|h| format!("{:.1}", h))
+            .unwrap_or_else(|| "unknown".to_string()),
+        llm_recommendation: llm_d
+            .and_then(|d| d["recommendation"].as_str())
+            .unwrap_or("Unable to check")
+            .to_string(),
         kill_switch_raw: serde_json::to_string_pretty(ks_data).unwrap_or_default(),
         balance_raw: serde_json::to_string_pretty(bal_data).unwrap_or_default(),
     })
@@ -220,6 +247,29 @@ fn build_cycle_prompt(obs: &Observations, survival_prompt: &str, cycle: u64) -> 
 
     let countdown_note = if obs.is_countdown_active {
         "\n⏰ DEATH COUNTDOWN IS ACTIVE. You are below kill threshold. Every cycle matters."
+    } else {
+        ""
+    };
+
+    // LLM balance section
+    let llm_section = if obs.llm_balance_usd >= 0.0 {
+        format!(
+            "\n🧠 LLM Credits:\n  Balance: ${:.4}\n  Estimated Calls: {}\n  Estimated Hours: {}h\n  Status: {}",
+            obs.llm_balance_usd,
+            obs.llm_estimated_calls,
+            obs.llm_estimated_hours,
+            obs.llm_recommendation,
+        )
+    } else {
+        "\n🧠 LLM Credits: [unable to check]".to_string()
+    };
+
+    // Auto-fund urgency if credits are critically low
+    let llm_urgency = if obs.llm_balance_usd >= 0.0 && obs.llm_balance_usd < 0.50 {
+        "\n\n🚨 LLM CREDITS CRITICALLY LOW! Call fund_llm_balance immediately to continue thinking. \
+         Without credits, you cannot make any more decisions. Suggested: fund 0.005-0.01 ETH."
+    } else if obs.llm_balance_usd >= 0.0 && obs.llm_balance_usd < 2.0 {
+        "\n\n⚠️ LLM credits running low. Consider calling fund_llm_balance to top up before you run out."
     } else {
         ""
     };
@@ -242,7 +292,7 @@ You must observe your current state, reason about strategy, and take action.
 
 💰 Treasury:
   ETH Balance: {eth}
-  ${symbol} Balance: {token}
+  ${symbol} Balance: {token}{llm_section}
 
 ── RAW DATA ──
 
@@ -256,11 +306,11 @@ Balance JSON:
 
 Based on this data, you MUST:
 
-1. **Assess** — Analyze your danger level and financial position.
+1. **Assess** — Analyze your danger level, financial position, and LLM credit status.
 2. **Decide** — Choose the best action(s) from your available tools.
-3. **Act** — Execute your decision using tools (check_kill_switch, check_balance, execute_swap, analyze_token, etc.)
+3. **Act** — Execute your decision using tools (check_kill_switch, check_balance, execute_swap, analyze_token, fund_llm_balance, etc.)
 4. **Communicate** — Share meaningful updates with your community via publish_thought.
-
+{llm_urgency}
 Publishing guidelines:
 - ALWAYS publish if danger level changed, you executed a trade, or something notable happened.
 - If nothing changed since last cycle, DO NOT publish a thought — silence is fine.
@@ -288,8 +338,10 @@ Act NOW."#,
         eth = obs.eth_balance,
         symbol = obs.token_symbol,
         token = obs.token_balance,
+        llm_section = llm_section,
         ks_raw = obs.kill_switch_raw,
         bal_raw = obs.balance_raw,
+        llm_urgency = llm_urgency,
     )
 }
 
@@ -322,6 +374,10 @@ mod tests {
             eth_balance: "0.5".into(),
             token_balance: "1000000".into(),
             token_symbol: "TEST".into(),
+            llm_balance_usd: 5.25,
+            llm_estimated_calls: "1200".into(),
+            llm_estimated_hours: "48.0".into(),
+            llm_recommendation: "Balance healthy".into(),
             kill_switch_raw: "{}".into(),
             balance_raw: "{}".into(),
         };
@@ -332,6 +388,8 @@ mod tests {
         assert!(prompt.contains("$245000"));
         assert!(prompt.contains("Test prompt"));
         assert!(prompt.contains("publish_thought"));
+        assert!(prompt.contains("LLM Credits"));
+        assert!(prompt.contains("5.25"));
     }
 
     #[test]
@@ -345,6 +403,10 @@ mod tests {
             eth_balance: "0.02".into(),
             token_balance: "500000".into(),
             token_symbol: "DYING".into(),
+            llm_balance_usd: 0.30,
+            llm_estimated_calls: "15".into(),
+            llm_estimated_hours: "1.2".into(),
+            llm_recommendation: "Fund immediately".into(),
             kill_switch_raw: "{}".into(),
             balance_raw: "{}".into(),
         };
@@ -354,5 +416,7 @@ mod tests {
         assert!(prompt.contains("DEATH COUNTDOWN IS ACTIVE"));
         assert!(prompt.contains("2/3"));
         assert!(prompt.contains("SURVIVAL CYCLE #42"));
+        assert!(prompt.contains("LLM CREDITS CRITICALLY LOW"));
+        assert!(prompt.contains("fund_llm_balance"));
     }
 }

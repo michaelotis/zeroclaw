@@ -18,8 +18,10 @@
 
 mod check_balance;
 mod check_kill_switch;
+mod check_llm_balance;
 mod analyze_token;
 mod execute_swap;
+mod fund_llm_balance;
 mod request_tool;
 mod platform_feedback;
 mod publish_thought;
@@ -29,8 +31,10 @@ mod make_announcement;
 
 pub use check_balance::CheckBalanceTool;
 pub use check_kill_switch::CheckKillSwitchTool;
+pub use check_llm_balance::CheckLlmBalanceTool;
 pub use analyze_token::AnalyzeTokenTool;
 pub use execute_swap::ExecuteSwapTool;
+pub use fund_llm_balance::FundLlmBalanceTool;
 pub use request_tool::RequestToolTool;
 pub use platform_feedback::PlatformFeedbackTool;
 pub use publish_thought::PublishThoughtTool;
@@ -82,8 +86,10 @@ pub fn clawfoundry_tools() -> Vec<Box<dyn Tool>> {
     vec![
         Box::new(CheckBalanceTool::new(config.clone())),
         Box::new(CheckKillSwitchTool::new(config.clone())),
+        Box::new(CheckLlmBalanceTool::new(config.clone())),
         Box::new(AnalyzeTokenTool::new(config.clone())),
         Box::new(ExecuteSwapTool::new(config.clone())),
+        Box::new(FundLlmBalanceTool::new(config.clone())),
         Box::new(RequestToolTool::new(config.clone())),
         Box::new(PlatformFeedbackTool::new(config.clone())),
         Box::new(PublishThoughtTool::new(config.clone())),
@@ -158,7 +164,7 @@ mod tests {
         std::env::set_var("CLAWFOUNDRY_TOKEN", "0x1234");
 
         let tools = clawfoundry_tools();
-        assert_eq!(tools.len(), 9);
+        assert_eq!(tools.len(), 12);
 
         for tool in &tools {
             let spec = tool.spec();

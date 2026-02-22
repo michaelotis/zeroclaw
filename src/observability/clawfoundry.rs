@@ -37,6 +37,10 @@ impl ClawFoundryObserver {
 }
 
 impl Observer for ClawFoundryObserver {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn record_event(&self, event: &ObserverEvent) {
         match event {
             ObserverEvent::AgentStart { provider, model } => {

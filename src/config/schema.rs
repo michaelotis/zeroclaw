@@ -4738,7 +4738,10 @@ default_temperature = 0.7
             agents: HashMap::new(),
             hooks: HooksConfig::default(),
             hardware: HardwareConfig::default(),
+
             transcription: TranscriptionConfig::default(),
+
+            survival: crate::survival::SurvivalConfig::default(),
         };
 
         let toml_str = toml::to_string_pretty(&config).unwrap();
@@ -4912,7 +4915,10 @@ tool_dispatcher = "xml"
             agents: HashMap::new(),
             hooks: HooksConfig::default(),
             hardware: HardwareConfig::default(),
+
             transcription: TranscriptionConfig::default(),
+
+            survival: crate::survival::SurvivalConfig::default(),
         };
 
         config.save().await.unwrap();
