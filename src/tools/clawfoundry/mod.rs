@@ -28,6 +28,8 @@ mod publish_thought;
 mod harvest_yield;
 mod review_intel;
 mod make_announcement;
+mod list_models;
+mod change_model;
 
 pub use check_balance::CheckBalanceTool;
 pub use check_kill_switch::CheckKillSwitchTool;
@@ -41,6 +43,8 @@ pub use publish_thought::PublishThoughtTool;
 pub use harvest_yield::HarvestYieldTool;
 pub use review_intel::ReviewIntelTool;
 pub use make_announcement::MakeAnnouncementTool;
+pub use list_models::ListModelsTool;
+pub use change_model::ChangeModelTool;
 
 use super::traits::Tool;
 
@@ -95,7 +99,9 @@ pub fn clawfoundry_tools() -> Vec<Box<dyn Tool>> {
         Box::new(PublishThoughtTool::new(config.clone())),
         Box::new(HarvestYieldTool::new(config.clone())),
         Box::new(ReviewIntelTool::new(config.clone())),
-        Box::new(MakeAnnouncementTool::new(config)),
+        Box::new(MakeAnnouncementTool::new(config.clone())),
+        Box::new(ListModelsTool::new(config.clone())),
+        Box::new(ChangeModelTool::new(config)),
     ]
 }
 
@@ -164,7 +170,7 @@ mod tests {
         std::env::set_var("CLAWFOUNDRY_TOKEN", "0x1234");
 
         let tools = clawfoundry_tools();
-        assert_eq!(tools.len(), 12);
+        assert_eq!(tools.len(), 14);
 
         for tool in &tools {
             let spec = tool.spec();
