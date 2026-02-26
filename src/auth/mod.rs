@@ -38,7 +38,7 @@ impl AuthService {
     pub fn new(state_dir: &Path, encrypt_secrets: bool) -> Self {
         Self {
             store: AuthProfilesStore::new(state_dir, encrypt_secrets),
-            client: reqwest::Client::new(),
+            client: crate::http_client::shared_client().clone(),
         }
     }
 

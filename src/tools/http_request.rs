@@ -120,14 +120,11 @@ impl HttpRequestTool {
         } else {
             self.timeout_secs
         };
-        let builder = reqwest::Client::builder()
-            .timeout(Duration::from_secs(timeout_secs))
-            .connect_timeout(Duration::from_secs(10))
-            .redirect(reqwest::redirect::Policy::none());
-        let builder = crate::config::apply_runtime_proxy_to_builder(builder, "tool.http_request");
-        let client = builder.build()?;
+        let client = crate::http_client::shared_no_redirect_client();
 
-        let mut request = client.request(method, url);
+        let mut request = client
+            .request(method, url)
+            .timeout(Duration::from_secs(timeout_secs));
 
         for (key, value) in headers {
             request = request.header(&key, &value);

@@ -21,30 +21,34 @@ mod check_kill_switch;
 mod check_llm_balance;
 mod analyze_token;
 mod execute_swap;
+mod execute_transaction;
 mod fund_llm_balance;
 mod request_tool;
 mod platform_feedback;
 mod publish_thought;
-mod harvest_yield;
 mod review_intel;
 mod make_announcement;
 mod list_models;
 mod change_model;
+mod browser_read;
+mod browser_screenshot;
 
 pub use check_balance::CheckBalanceTool;
 pub use check_kill_switch::CheckKillSwitchTool;
 pub use check_llm_balance::CheckLlmBalanceTool;
 pub use analyze_token::AnalyzeTokenTool;
 pub use execute_swap::ExecuteSwapTool;
+pub use execute_transaction::ExecuteTransactionTool;
 pub use fund_llm_balance::FundLlmBalanceTool;
 pub use request_tool::RequestToolTool;
 pub use platform_feedback::PlatformFeedbackTool;
 pub use publish_thought::PublishThoughtTool;
-pub use harvest_yield::HarvestYieldTool;
 pub use review_intel::ReviewIntelTool;
 pub use make_announcement::MakeAnnouncementTool;
 pub use list_models::ListModelsTool;
 pub use change_model::ChangeModelTool;
+pub use browser_read::BrowserReadTool;
+pub use browser_screenshot::BrowserScreenshotTool;
 
 use super::traits::Tool;
 
@@ -93,15 +97,17 @@ pub fn clawfoundry_tools() -> Vec<Box<dyn Tool>> {
         Box::new(CheckLlmBalanceTool::new(config.clone())),
         Box::new(AnalyzeTokenTool::new(config.clone())),
         Box::new(ExecuteSwapTool::new(config.clone())),
+        Box::new(ExecuteTransactionTool::new(config.clone())),
         Box::new(FundLlmBalanceTool::new(config.clone())),
         Box::new(RequestToolTool::new(config.clone())),
         Box::new(PlatformFeedbackTool::new(config.clone())),
         Box::new(PublishThoughtTool::new(config.clone())),
-        Box::new(HarvestYieldTool::new(config.clone())),
         Box::new(ReviewIntelTool::new(config.clone())),
         Box::new(MakeAnnouncementTool::new(config.clone())),
         Box::new(ListModelsTool::new(config.clone())),
-        Box::new(ChangeModelTool::new(config)),
+        Box::new(ChangeModelTool::new(config.clone())),
+        Box::new(BrowserReadTool::new(config.clone())),
+        Box::new(BrowserScreenshotTool::new(config)),
     ]
 }
 
@@ -113,12 +119,11 @@ pub(crate) async fn call_orchestrator(
 ) -> anyhow::Result<serde_json::Value> {
     let url = format!("{}/internal/tools/{}", config.orchestrator_url, tool_name);
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()?;
+    let client = crate::http_client::shared_client();
 
     let mut req = client
         .post(&url)
+        .timeout(std::time::Duration::from_secs(15))
         .header("Content-Type", "application/json")
         .header("X-Agent-Token", &config.agent_token);
 
@@ -170,7 +175,7 @@ mod tests {
         std::env::set_var("CLAWFOUNDRY_TOKEN", "0x1234");
 
         let tools = clawfoundry_tools();
-        assert_eq!(tools.len(), 14);
+        assert_eq!(tools.len(), 16);
 
         for tool in &tools {
             let spec = tool.spec();

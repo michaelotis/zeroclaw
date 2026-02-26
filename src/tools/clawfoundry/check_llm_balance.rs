@@ -40,18 +40,22 @@ impl Tool for CheckLlmBalanceTool {
             Ok(response) => {
                 let data = &response["data"];
                 let balance = data["balanceUsd"].as_f64().unwrap_or(0.0);
-                let estimated_calls = data["estimatedCalls"]
+                let estimated_calls = data["estimatedCallsRemaining"]
                     .as_u64()
                     .map(|c| c.to_string())
                     .unwrap_or_else(|| "unknown".to_string());
-                let estimated_hours = data["estimatedHoursRemaining"]
+                let burn_rate_obj = &data["burnRate"];
+                let estimated_hours = burn_rate_obj["estimatedHoursRemaining"]
                     .as_f64()
                     .map(|h| format!("{:.1}h", h))
                     .unwrap_or_else(|| "unknown".to_string());
-                let burn_rate = data["burnRate24h"]
+                let burn_rate = burn_rate_obj["costPerHour"]
                     .as_f64()
-                    .map(|r| format!("${:.4}/day", r))
+                    .map(|r| format!("${:.4}/hr (${:.4}/day)", r, r * 24.0))
                     .unwrap_or_else(|| "unknown".to_string());
+                let requests_24h = burn_rate_obj["requestsLast24h"]
+                    .as_u64()
+                    .unwrap_or(0);
                 let recommendation = data["recommendation"]
                     .as_str()
                     .unwrap_or("Monitor balance")
@@ -59,11 +63,12 @@ impl Tool for CheckLlmBalanceTool {
 
                 let output = format!(
                     "LLM Credit Balance: ${:.4}\n\
-                     Burn Rate (24h): {}\n\
+                     Burn Rate: {}\n\
+                     Requests (24h): {}\n\
                      Estimated Calls Remaining: {}\n\
                      Estimated Time Remaining: {}\n\
                      Recommendation: {}",
-                    balance, burn_rate, estimated_calls, estimated_hours, recommendation,
+                    balance, burn_rate, requests_24h, estimated_calls, estimated_hours, recommendation,
                 );
                 Ok(ToolResult {
                     success: true,

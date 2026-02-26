@@ -54,14 +54,13 @@ impl AwsCredentials {
 
     /// Fetch credentials from EC2 IMDSv2 instance metadata service.
     async fn from_imds() -> anyhow::Result<Self> {
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(3))
-            .build()?;
+        let client = crate::http_client::shared_client();
 
         // Step 1: get IMDSv2 token
         let token = client
             .put("http://169.254.169.254/latest/api/token")
             .header("X-aws-ec2-metadata-token-ttl-seconds", "21600")
+            .timeout(std::time::Duration::from_secs(3))
             .send()
             .await?
             .text()
@@ -71,6 +70,7 @@ impl AwsCredentials {
         let role = client
             .get("http://169.254.169.254/latest/meta-data/iam/security-credentials/")
             .header("X-aws-ec2-metadata-token", &token)
+            .timeout(std::time::Duration::from_secs(3))
             .send()
             .await?
             .text()
@@ -86,6 +86,7 @@ impl AwsCredentials {
         let creds_json: serde_json::Value = client
             .get(&creds_url)
             .header("X-aws-ec2-metadata-token", &token)
+            .timeout(std::time::Duration::from_secs(3))
             .send()
             .await?
             .json()
@@ -105,6 +106,7 @@ impl AwsCredentials {
         let region = match client
             .get("http://169.254.169.254/latest/meta-data/placement/region")
             .header("X-aws-ec2-metadata-token", &token)
+            .timeout(std::time::Duration::from_secs(3))
             .send()
             .await
         {

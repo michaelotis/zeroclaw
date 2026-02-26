@@ -199,6 +199,8 @@ impl OpenAiCompatibleProvider {
         result
     }
 
+    // TODO(#36): When user_agent is set, a new reqwest::Client is built per call.
+    // Consider caching this client in a OnceLock<Client> field on the struct.
     fn http_client(&self) -> Client {
         if let Some(ua) = self.user_agent.as_deref() {
             let mut headers = HeaderMap::new();

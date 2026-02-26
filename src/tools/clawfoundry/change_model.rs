@@ -77,9 +77,12 @@ impl Tool for ChangeModelTool {
                 let new_model = data["model"].as_str().unwrap_or(model);
                 let provider = data["provider"].as_str().unwrap_or("unknown");
                 let cost = data["costPerRequest"]
-                    .as_f64()
-                    .map(|c| format!("${:.4}/req", c))
-                    .unwrap_or_else(|| "unknown".to_string());
+                    .as_str()
+                    .unwrap_or("unknown")
+                    .to_string();
+                let tier = data["tier"]
+                    .as_str()
+                    .unwrap_or("unknown");
                 let tool_warning = data["toolSupportWarning"]
                     .as_str()
                     .unwrap_or("");
@@ -87,9 +90,10 @@ impl Tool for ChangeModelTool {
                 let mut output = format!(
                     "✅ Model switched to: {}\n\
                      Provider: {}\n\
-                     Cost: {}\n\
+                     Tier: {}\n\
+                     Cost: {}/req\n\
                      Reason: {}",
-                    new_model, provider, cost, reason,
+                    new_model, provider, tier, cost, reason,
                 );
 
                 if !tool_warning.is_empty() {

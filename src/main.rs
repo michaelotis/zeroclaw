@@ -83,6 +83,7 @@ mod survival;
 mod tools;
 mod tunnel;
 mod util;
+mod http_client;
 
 use config::Config;
 
@@ -1360,13 +1361,13 @@ async fn handle_auth_command(auth_command: AuthCommands, config: &Config) -> Res
             device_code,
         } => {
             let provider = auth::normalize_provider(&provider)?;
-            let client = reqwest::Client::new();
+            let client = crate::http_client::shared_client();
 
             match provider.as_str() {
                 "gemini" => {
                     // Gemini OAuth flow
                     if device_code {
-                        match auth::gemini_oauth::start_device_code_flow(&client).await {
+                        match auth::gemini_oauth::start_device_code_flow(client).await {
                             Ok(device) => {
                                 println!("Google/Gemini device-code login started.");
                                 println!("Visit: {}", device.verification_uri);
@@ -1376,7 +1377,7 @@ async fn handle_auth_command(auth_command: AuthCommands, config: &Config) -> Res
                                 }
 
                                 let token_set =
-                                    auth::gemini_oauth::poll_device_code_tokens(&client, &device)
+                                    auth::gemini_oauth::poll_device_code_tokens(client, &device)
                                         .await?;
                                 let account_id = token_set.id_token.as_deref().and_then(
                                     auth::gemini_oauth::extract_account_email_from_id_token,
@@ -1435,7 +1436,7 @@ async fn handle_auth_command(auth_command: AuthCommands, config: &Config) -> Res
                     };
 
                     let token_set =
-                        auth::gemini_oauth::exchange_code_for_tokens(&client, &code, &pkce).await?;
+                        auth::gemini_oauth::exchange_code_for_tokens(client, &code, &pkce).await?;
                     let account_id = token_set
                         .id_token
                         .as_deref()
@@ -1452,7 +1453,7 @@ async fn handle_auth_command(auth_command: AuthCommands, config: &Config) -> Res
                 "openai-codex" => {
                     // OpenAI Codex OAuth flow
                     if device_code {
-                        match auth::openai_oauth::start_device_code_flow(&client).await {
+                        match auth::openai_oauth::start_device_code_flow(client).await {
                             Ok(device) => {
                                 println!("OpenAI device-code login started.");
                                 println!("Visit: {}", device.verification_uri);
@@ -1465,7 +1466,7 @@ async fn handle_auth_command(auth_command: AuthCommands, config: &Config) -> Res
                                 }
 
                                 let token_set =
-                                    auth::openai_oauth::poll_device_code_tokens(&client, &device)
+                                    auth::openai_oauth::poll_device_code_tokens(client, &device)
                                         .await?;
                                 let account_id =
                                     extract_openai_account_id_for_profile(&token_set.access_token);
@@ -1520,7 +1521,7 @@ async fn handle_auth_command(auth_command: AuthCommands, config: &Config) -> Res
                     };
 
                     let token_set =
-                        auth::openai_oauth::exchange_code_for_tokens(&client, &code, &pkce).await?;
+                        auth::openai_oauth::exchange_code_for_tokens(client, &code, &pkce).await?;
                     let account_id = extract_openai_account_id_for_profile(&token_set.access_token);
 
                     auth_service
@@ -1579,9 +1580,9 @@ async fn handle_auth_command(auth_command: AuthCommands, config: &Config) -> Res
                         state: pending.state.clone(),
                     };
 
-                    let client = reqwest::Client::new();
+                    let client = crate::http_client::shared_client();
                     let token_set =
-                        auth::openai_oauth::exchange_code_for_tokens(&client, &code, &pkce).await?;
+                        auth::openai_oauth::exchange_code_for_tokens(client, &code, &pkce).await?;
                     let account_id = extract_openai_account_id_for_profile(&token_set.access_token);
 
                     auth_service
@@ -1623,9 +1624,9 @@ async fn handle_auth_command(auth_command: AuthCommands, config: &Config) -> Res
                         state: pending.state.clone(),
                     };
 
-                    let client = reqwest::Client::new();
+                    let client = crate::http_client::shared_client();
                     let token_set =
-                        auth::gemini_oauth::exchange_code_for_tokens(&client, &code, &pkce).await?;
+                        auth::gemini_oauth::exchange_code_for_tokens(client, &code, &pkce).await?;
                     let account_id = token_set
                         .id_token
                         .as_deref()

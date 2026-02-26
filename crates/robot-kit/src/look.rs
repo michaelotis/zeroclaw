@@ -97,6 +97,9 @@ impl LookTool {
             base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &image_bytes);
 
         // Call Ollama with image
+        // TODO(#36): Use a shared reqwest::Client instead of creating one per call.
+        // The robot-kit crate doesn't have access to http_client::shared_client()
+        // yet — consider adding a client field to LookCapability or passing one in.
         let client = reqwest::Client::new();
         let response = client
             .post(format!("{}/api/generate", self.config.camera.ollama_url))

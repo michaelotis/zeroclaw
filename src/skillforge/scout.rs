@@ -73,6 +73,9 @@ pub struct GitHubScout {
 }
 
 impl GitHubScout {
+    // TODO(#36): GitHubScout builds its own reqwest::Client with custom
+    // default_headers. Consider using http_client::shared_client() and
+    // setting headers per-request instead.
     pub fn new(token: Option<String>) -> Self {
         use std::time::Duration;
 

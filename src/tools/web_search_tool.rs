@@ -32,12 +32,14 @@ impl WebSearchTool {
         let encoded_query = urlencoding::encode(query);
         let search_url = format!("https://html.duckduckgo.com/html/?q={}", encoded_query);
 
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(self.timeout_secs))
-            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-            .build()?;
+        let client = crate::http_client::shared_client();
 
-        let response = client.get(&search_url).send().await?;
+        let response = client
+            .get(&search_url)
+            .timeout(Duration::from_secs(self.timeout_secs))
+            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            .send()
+            .await?;
 
         if !response.status().is_success() {
             anyhow::bail!(
@@ -110,12 +112,11 @@ impl WebSearchTool {
             encoded_query, self.max_results
         );
 
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(self.timeout_secs))
-            .build()?;
+        let client = crate::http_client::shared_client();
 
         let response = client
             .get(&search_url)
+            .timeout(Duration::from_secs(self.timeout_secs))
             .header("Accept", "application/json")
             .header("X-Subscription-Token", api_key)
             .send()

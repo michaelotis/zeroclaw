@@ -21,7 +21,7 @@ impl NextcloudTalkChannel {
             base_url: base_url.trim_end_matches('/').to_string(),
             app_token,
             allowed_users,
-            client: reqwest::Client::new(),
+            client: crate::http_client::shared_client().clone(),
         }
     }
 

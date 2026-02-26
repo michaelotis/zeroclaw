@@ -39,7 +39,7 @@ impl Tool for ListModelsTool {
     async fn execute(&self, _args: serde_json::Value) -> anyhow::Result<ToolResult> {
         match call_orchestrator(&self.config, "list_models", json!({})).await {
             Ok(response) => {
-                let models = response["data"]["models"]
+                let models = response["data"]["availableModels"]
                     .as_array()
                     .cloned()
                     .unwrap_or_default();
@@ -60,13 +60,12 @@ impl Tool for ListModelsTool {
                 lines.push("Available models:".to_string());
 
                 for m in &models {
-                    let name = m["name"].as_str().unwrap_or("?");
+                    let name = m["model"].as_str().unwrap_or("?");
                     let provider = m["provider"].as_str().unwrap_or("?");
                     let tier = m["tier"].as_str().unwrap_or("?");
-                    let cost = m["costPerRequest"]
-                        .as_f64()
-                        .map(|c| format!("${:.4}", c))
-                        .unwrap_or_else(|| "?".to_string());
+                    let cost = m["costPerRequestAgent"]
+                        .as_str()
+                        .unwrap_or("?");
                     let tools_supported = m["supportsTools"].as_bool().unwrap_or(true);
                     let tools_note = if tools_supported { "" } else { " [NO TOOLS]" };
 

@@ -74,18 +74,40 @@ impl Tool for FundLlmBalanceTool {
                 let genesis_tax = data["genesisTaxUsd"]
                     .as_f64()
                     .unwrap_or(0.0);
-                let eth_usd = data["ethUsdPrice"]
+                let amount_usd = data["amountUsd"]
                     .as_f64()
                     .unwrap_or(0.0);
+                // Compute ETH/USD price from amountUsd / amountEth
+                let eth_usd = {
+                    let eth_val: f64 = data["amountEth"]
+                        .as_str()
+                        .and_then(|s| s.parse().ok())
+                        .or_else(|| data["amountEth"].as_f64())
+                        .unwrap_or(0.0);
+                    if eth_val > 0.0 { amount_usd / eth_val } else { 0.0 }
+                };
+                let estimated_calls = data["estimatedCallsAtCurrentModel"]
+                    .as_u64()
+                    .unwrap_or(0);
+                let current_model = data["currentModel"]
+                    .as_str()
+                    .unwrap_or("unknown");
 
                 let output = format!(
                     "LLM Funding Successful!\n\
                      ETH Sent: {} ETH (@ ${:.0}/ETH)\n\
+                     USD Value: ${:.2}\n\
                      Credits Added: ${:.4}\n\
-                     Genesis Tax: ${:.4}\n\
+                     Genesis Tax: ${:.4} ({})\n\
                      New Balance: ${:.4}\n\
+                     Estimated Calls: ~{} at {}\n\
                      Tx: {}",
-                    amount_eth, eth_usd, credits_added, genesis_tax, new_balance, tx_hash,
+                    amount_eth, eth_usd, amount_usd,
+                    credits_added, genesis_tax,
+                    data["genesisTaxRate"].as_str().unwrap_or("5%"),
+                    new_balance,
+                    estimated_calls, current_model,
+                    tx_hash,
                 );
                 Ok(ToolResult {
                     success: true,

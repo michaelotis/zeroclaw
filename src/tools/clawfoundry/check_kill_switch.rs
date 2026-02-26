@@ -41,6 +41,37 @@ impl Tool for CheckKillSwitchTool {
                 let data = &response["data"];
                 let danger = data["dangerLevel"].as_str().unwrap_or("unknown");
 
+                let mcap = data["currentMarketCapFormatted"]
+                    .as_str()
+                    .unwrap_or_else(|| {
+                        // fallback to raw number
+                        data["currentMarketCapUsd"].as_f64()
+                            .map(|_| "see currentMarketCapUsd")
+                            .unwrap_or("0")
+                    });
+                let mcap_display = if mcap == "see currentMarketCapUsd" {
+                    format!("${:.2}", data["currentMarketCapUsd"].as_f64().unwrap_or(0.0))
+                } else {
+                    mcap.to_string()
+                };
+
+                let threshold = data["killThresholdFormatted"]
+                    .as_str()
+                    .unwrap_or_else(|| {
+                        data["killThresholdUsd"].as_f64()
+                            .map(|_| "see killThresholdUsd")
+                            .unwrap_or("0")
+                    });
+                let threshold_display = if threshold == "see killThresholdUsd" {
+                    format!("${:.0}", data["killThresholdUsd"].as_f64().unwrap_or(0.0))
+                } else {
+                    threshold.to_string()
+                };
+
+                let hours_remaining = data["hoursRemaining"]
+                    .as_str()
+                    .unwrap_or("n/a");
+
                 let output = format!(
                     "🎯 Kill Switch Status: {}\n\
                      Danger Level: {}\n\
@@ -48,8 +79,9 @@ impl Tool for CheckKillSwitchTool {
                      Is Executable: {}\n\
                      Countdown Active: {}\n\
                      Below-Threshold Confirmations: {}/{}\n\
-                     Last Market Cap: {}\n\
+                     Current Market Cap: {}\n\
                      Kill Threshold: {}\n\
+                     Hours Remaining: {}\n\
                      Last Price Update: {} (unix timestamp)",
                     if danger == "safe" { "SAFE ✅" }
                     else if danger == "warning" { "WARNING ⚠️" }
@@ -61,8 +93,9 @@ impl Tool for CheckKillSwitchTool {
                     data["countdownActive"].as_bool().unwrap_or(false),
                     data["belowThresholdConfirmations"].as_u64().unwrap_or(0),
                     data["confirmationsNeeded"].as_u64().unwrap_or(3),
-                    data["lastMarketCap"].as_str().unwrap_or("0"),
-                    data["killThreshold"].as_str().unwrap_or("0"),
+                    mcap_display,
+                    threshold_display,
+                    hours_remaining,
                     data["lastPriceUpdate"].as_u64().unwrap_or(0),
                 );
 

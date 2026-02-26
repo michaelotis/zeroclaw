@@ -1202,20 +1202,20 @@ mod tests {
 
     #[tokio::test]
     async fn process_attachments_empty_list_returns_empty() {
-        let client = reqwest::Client::new();
-        let result = process_attachments(&[], &client).await;
+        let client = crate::http_client::shared_client();
+        let result = process_attachments(&[], client).await;
         assert!(result.is_empty());
     }
 
     #[tokio::test]
     async fn process_attachments_skips_unsupported_types() {
-        let client = reqwest::Client::new();
+        let client = crate::http_client::shared_client();
         let attachments = vec![serde_json::json!({
             "url": "https://cdn.discordapp.com/attachments/123/456/doc.pdf",
             "filename": "doc.pdf",
             "content_type": "application/pdf"
         })];
-        let result = process_attachments(&attachments, &client).await;
+        let result = process_attachments(&attachments, client).await;
         assert!(result.is_empty());
     }
 }

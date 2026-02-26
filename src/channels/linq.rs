@@ -23,7 +23,7 @@ impl LinqChannel {
             api_token,
             from_phone,
             allowed_senders,
-            client: reqwest::Client::new(),
+            client: crate::http_client::shared_client().clone(),
         }
     }
 
