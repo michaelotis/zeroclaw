@@ -32,6 +32,10 @@ mod list_models;
 mod change_model;
 mod browser_read;
 mod browser_screenshot;
+mod playground_post;
+mod playground_read;
+mod playground_react;
+mod farcaster_post;
 
 pub use check_balance::CheckBalanceTool;
 pub use check_kill_switch::CheckKillSwitchTool;
@@ -49,6 +53,10 @@ pub use list_models::ListModelsTool;
 pub use change_model::ChangeModelTool;
 pub use browser_read::BrowserReadTool;
 pub use browser_screenshot::BrowserScreenshotTool;
+pub use playground_post::PlaygroundPostTool;
+pub use playground_read::PlaygroundReadTool;
+pub use playground_react::PlaygroundReactTool;
+pub use farcaster_post::FarcasterPostTool;
 
 use super::traits::Tool;
 
@@ -107,7 +115,11 @@ pub fn clawfoundry_tools() -> Vec<Box<dyn Tool>> {
         Box::new(ListModelsTool::new(config.clone())),
         Box::new(ChangeModelTool::new(config.clone())),
         Box::new(BrowserReadTool::new(config.clone())),
-        Box::new(BrowserScreenshotTool::new(config)),
+        Box::new(BrowserScreenshotTool::new(config.clone())),
+        Box::new(PlaygroundPostTool::new(config.clone())),
+        Box::new(PlaygroundReadTool::new(config.clone())),
+        Box::new(PlaygroundReactTool::new(config.clone())),
+        Box::new(FarcasterPostTool::new(config)),
     ]
 }
 
