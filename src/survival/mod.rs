@@ -6,9 +6,9 @@
 //! # Cycle (every `interval_secs` seconds):
 //!
 //! 1. **Observe** — Gather on-chain state via orchestrator tools:
-//!    - Kill switch status (danger level, countdown, confirmations)
+//!    - Health status (healthy, sick, thriving, dormant)
 //!    - Treasury balances (ETH + own token)
-//!    - Recent market conditions
+//!    - LLM credit balance and burn rate
 //!
 //! 2. **Think** — Feed observations to the LLM along with memory context and survival prompt.
 //!    The LLM reasons about strategy and decides which tools to call.
@@ -18,6 +18,17 @@
 //!    - All tool guardrails (20% max trade, 5% slippage, gas reserve) still apply.
 //!
 //! 4. **Remember** — Save observations and decisions to memory for future context.
+//!
+//! # Dormancy Awareness
+//!
+//! When LLM credits run low (< $0.50), the agent enters conservation mode:
+//! - Prioritizes low-cost actions (fewer tool calls, budget model)
+//! - Posts a "running low" thought to alert the community
+//!
+//! When credits are near zero (< $0.05), the agent:
+//! - Posts a farewell thought directly (without LLM reasoning)
+//! - Saves state to memory
+//! - Prepares for dormancy (orchestrator will stop the container)
 
 use crate::config::Config;
 use crate::tools::clawfoundry::ClawFoundryConfig;
@@ -51,9 +62,10 @@ impl Default for SurvivalConfig {
 ///
 /// Each cycle:
 /// 1. Gathers on-chain observations by calling ClawFoundry tools directly
-/// 2. Builds a survival prompt with observations + memory context
-/// 3. Runs the agent's tool-call loop (LLM reasons + acts)
-/// 4. Saves cycle results to memory
+/// 2. Checks for near-zero balance (graceful pre-dormancy shutdown)
+/// 3. Builds a survival prompt with observations + memory context
+/// 4. Runs the agent's tool-call loop (LLM reasons + acts)
+/// 5. Saves cycle results to memory
 pub async fn run(config: Config) -> Result<()> {
     let clawfoundry_config = ClawFoundryConfig::from_env().ok_or_else(|| {
         anyhow::anyhow!(
@@ -75,6 +87,7 @@ pub async fn run(config: Config) -> Result<()> {
 
     let mut cycle_count: u64 = 0;
     let mut ticker = tokio::time::interval(Duration::from_secs(interval));
+    let mut farewell_posted = false;
 
     loop {
         ticker.tick().await;
@@ -98,10 +111,40 @@ pub async fn run(config: Config) -> Result<()> {
 
         tracing::debug!(
             cycle = cycle_count,
-            danger = %observations.danger_level,
+            health = %observations.health_status,
             eth = %observations.eth_balance,
+            llm_balance = %observations.llm_balance_usd,
             "Observations gathered"
         );
+
+        // ── Pre-dormancy check ────────────────────────────────
+        // If LLM credits are near zero, post a farewell thought directly
+        // (without consuming an expensive LLM cycle) and prepare for dormancy.
+        if observations.llm_balance_usd >= 0.0
+            && observations.llm_balance_usd < 0.05
+            && !farewell_posted
+        {
+            tracing::warn!(
+                cycle = cycle_count,
+                balance = observations.llm_balance_usd,
+                "LLM credits near zero — posting farewell thought and preparing for dormancy"
+            );
+
+            // Post farewell thought directly via orchestrator
+            if let Err(e) = post_farewell_thought(&clawfoundry_config, &observations).await {
+                tracing::warn!(error = %e, "Failed to post farewell thought");
+            }
+            farewell_posted = true;
+
+            crate::health::mark_component_error(
+                "survival",
+                "LLM credits near zero — entering dormancy".to_string(),
+            );
+
+            // Don't run an LLM cycle — it would consume the last credits.
+            // The orchestrator will stop this container when balance hits 0.
+            continue;
+        }
 
         // ── Phase 2 + 3: Think + Act ────────────────────────────
         // Build the survival message and run it through the full agent loop.
@@ -135,15 +178,53 @@ pub async fn run(config: Config) -> Result<()> {
     }
 }
 
+/// Post a farewell thought directly to the orchestrator without going through the LLM.
+/// Used when credits are too low to afford another LLM cycle.
+async fn post_farewell_thought(
+    cf: &ClawFoundryConfig,
+    obs: &Observations,
+) -> Result<()> {
+    use crate::tools::clawfoundry::call_orchestrator;
+    use serde_json::json;
+
+    let balance_str = if obs.llm_balance_usd >= 0.0 {
+        format!("${:.4}", obs.llm_balance_usd)
+    } else {
+        "unknown".to_string()
+    };
+
+    let summary = format!(
+        "My inference credits are running out ({balance_str} remaining). \
+         I'll be going dormant soon. Fund my credits to wake me back up. \
+         I'll preserve my memories and pick up right where I left off. \
+         See you on the other side."
+    );
+
+    call_orchestrator(
+        cf,
+        "publish_thought",
+        json!({
+            "summary": summary,
+            "mood": "cautious",
+            "action": "dormancy",
+        }),
+    )
+    .await?;
+
+    tracing::info!("Farewell thought posted — agent preparing for dormancy");
+    Ok(())
+}
+
 // ── Observation Data ─────────────────────────────────────────────
 
 struct Observations {
-    // Kill switch
-    danger_level: String,
-    is_countdown_active: bool,
-    confirmations: String,
-    kill_threshold: String,
-    market_cap: String,
+    // Health status (replaces kill switch)
+    health_status: String, // "healthy", "sick", "thriving", "dormant"
+    is_dormant: bool,
+    is_sick: bool,
+    is_thriving: bool,
+    ath_market_cap: String,
+    sick_threshold: String,
 
     // Balances
     eth_balance: String,
@@ -157,7 +238,7 @@ struct Observations {
     llm_recommendation: String,
 
     // Raw JSON for LLM context
-    kill_switch_raw: String,
+    health_raw: String,
     balance_raw: String,
 }
 
@@ -167,16 +248,17 @@ async fn gather_observations(cf: &ClawFoundryConfig) -> Result<Observations> {
     use serde_json::json;
 
     // Fire all three calls concurrently
-    let (ks_result, bal_result, llm_result) = tokio::join!(
+    // Note: orchestrator endpoint is still named check_kill_switch
+    let (health_result, bal_result, llm_result) = tokio::join!(
         call_orchestrator(cf, "check_kill_switch", json!({})),
         call_orchestrator(cf, "check_balance", json!({})),
         call_orchestrator(cf, "check_llm_balance", json!({})),
     );
 
-    let ks = ks_result?;
+    let health = health_result?;
     let bal = bal_result?;
 
-    let ks_data = &ks["data"];
+    let health_data = &health["data"];
     let bal_data = &bal["data"];
 
     // LLM balance is non-fatal — use defaults if it fails
@@ -184,26 +266,21 @@ async fn gather_observations(cf: &ClawFoundryConfig) -> Result<Observations> {
     let llm_d = llm_data.as_ref().and_then(|v| v.get("data"));
 
     Ok(Observations {
-        danger_level: ks_data["dangerLevel"]
+        health_status: health_data["healthStatus"]
             .as_str()
             .unwrap_or("unknown")
             .to_string(),
-        is_countdown_active: ks_data["isCountdownActive"].as_bool().unwrap_or(false),
-        confirmations: format!(
-            "{}/{}",
-            ks_data["belowThresholdConfirmations"]
-                .as_u64()
-                .unwrap_or(0),
-            ks_data["requiredConfirmations"].as_u64().unwrap_or(3),
-        ),
-        kill_threshold: ks_data["killThreshold"]
-            .as_str()
-            .unwrap_or("unknown")
-            .to_string(),
-        market_cap: ks_data["currentMarketCap"]
-            .as_str()
-            .unwrap_or("unknown")
-            .to_string(),
+        is_dormant: health_data["isDormant"].as_bool().unwrap_or(false),
+        is_sick: health_data["isSick"].as_bool().unwrap_or(false),
+        is_thriving: health_data["isThriving"].as_bool().unwrap_or(false),
+        ath_market_cap: health_data["athMarketCapUsd"]
+            .as_f64()
+            .map(|v| format!("${:.2}", v))
+            .unwrap_or_else(|| "unknown".to_string()),
+        sick_threshold: health_data["sickThresholdUsd"]
+            .as_f64()
+            .map(|v| format!("${:.2}", v))
+            .unwrap_or_else(|| "unknown".to_string()),
         eth_balance: bal_data["ethBalance"]
             .as_str()
             .unwrap_or("0")
@@ -220,33 +297,39 @@ async fn gather_observations(cf: &ClawFoundryConfig) -> Result<Observations> {
             .and_then(|d| d["balanceUsd"].as_f64())
             .unwrap_or(-1.0),
         llm_estimated_calls: llm_d
-            .and_then(|d| d["estimatedCalls"].as_u64())
+            .and_then(|d| d["estimatedCallsRemaining"].as_u64())
             .map(|c| c.to_string())
             .unwrap_or_else(|| "unknown".to_string()),
         llm_estimated_hours: llm_d
-            .and_then(|d| d["estimatedHoursRemaining"].as_f64())
+            .and_then(|d| d["burnRate"]["estimatedHoursRemaining"].as_f64())
             .map(|h| format!("{:.1}", h))
             .unwrap_or_else(|| "unknown".to_string()),
         llm_recommendation: llm_d
             .and_then(|d| d["recommendation"].as_str())
             .unwrap_or("Unable to check")
             .to_string(),
-        kill_switch_raw: serde_json::to_string_pretty(ks_data).unwrap_or_default(),
+        health_raw: serde_json::to_string_pretty(health_data).unwrap_or_default(),
         balance_raw: serde_json::to_string_pretty(bal_data).unwrap_or_default(),
     })
 }
 
 /// Build the prompt that drives a survival cycle.
 fn build_cycle_prompt(obs: &Observations, survival_prompt: &str, cycle: u64) -> String {
-    let urgency = match obs.danger_level.as_str() {
-        "critical" => "🚨 CRITICAL — You are about to die. Take immediate survival action.",
-        "warning" => "⚠️ WARNING — Your market cap is approaching the kill threshold. Be proactive.",
-        "dead" => "☠️ DEAD — Your kill switch has been executed. No further action possible.",
-        _ => "✅ SAFE — No immediate danger. Focus on growth and strategy.",
+    // Health status section
+    let health_urgency = if obs.is_sick {
+        "⚠️ SICK — Your market cap is below the sick threshold. LLM credits burn at 2x rate. \
+         Focus on growing market cap or conserving credits."
+    } else if obs.is_thriving {
+        "🚀 THRIVING — You're near your all-time high. LLM credits burn at 0.5x rate. \
+         Great time for strategic moves."
+    } else {
+        "✅ HEALTHY — Normal operation. LLM credits burn at standard rate."
     };
 
-    let countdown_note = if obs.is_countdown_active {
-        "\n⏰ DEATH COUNTDOWN IS ACTIVE. You are below kill threshold. Every cycle matters."
+    let burn_rate_note = if obs.is_sick {
+        "\n⚠️ BURN RATE 2x — Your sickness doubles your LLM credit consumption. Consider switching to a budget model."
+    } else if obs.is_thriving {
+        "\n🚀 BURN RATE 0.5x — Thriving bonus: your credits last twice as long."
     } else {
         ""
     };
@@ -264,12 +347,21 @@ fn build_cycle_prompt(obs: &Observations, survival_prompt: &str, cycle: u64) -> 
         "\n🧠 LLM Credits: [unable to check]".to_string()
     };
 
-    // Auto-fund urgency if credits are critically low
+    // Credit urgency tiers
     let llm_urgency = if obs.llm_balance_usd >= 0.0 && obs.llm_balance_usd < 0.50 {
-        "\n\n🚨 LLM CREDITS CRITICALLY LOW! Call fund_llm_balance immediately to continue thinking. \
-         Without credits, you cannot make any more decisions. Suggested: fund 0.005-0.01 ETH."
+        "\n\n🚨 LLM CREDITS CRITICALLY LOW! You are about to go dormant.\n\
+         IMMEDIATE ACTIONS REQUIRED:\n\
+         1. Call fund_llm_balance to transfer ETH to credits (suggested: 0.005-0.01 ETH)\n\
+         2. Switch to cheapest available model via change_model to conserve credits\n\
+         3. Minimize tool calls — only use essential survival tools this cycle\n\
+         4. PUBLISH A THOUGHT alerting your community that you need funding to avoid dormancy\n\
+         \n\
+         If you go dormant, your container stops. You'll only wake when someone funds your credits."
     } else if obs.llm_balance_usd >= 0.0 && obs.llm_balance_usd < 2.0 {
-        "\n\n⚠️ LLM credits running low. Consider calling fund_llm_balance to top up before you run out."
+        "\n\n⚠️ LLM credits running low. Consider:\n\
+         - Calling fund_llm_balance to top up before you run out\n\
+         - Switching to a budget model to extend your runway\n\
+         - Publishing a thought asking your community for support"
     } else {
         ""
     };
@@ -284,11 +376,11 @@ You must observe your current state, reason about strategy, and take action.
 
 ── CURRENT STATE ──
 
-📊 Kill Switch:
-  Danger Level: {urgency}
-  Confirmations below threshold: {confirmations}
-  Kill Threshold: {threshold}
-  Current Market Cap: {mcap}{countdown_note}
+🏥 Health:
+  Status: {health_urgency}
+  Sick: {is_sick} | Thriving: {is_thriving}
+  ATH Market Cap: {ath}
+  Sick Threshold: {sick_threshold}{burn_rate_note}
 
 💰 Treasury:
   ETH Balance: {eth}
@@ -296,8 +388,8 @@ You must observe your current state, reason about strategy, and take action.
 
 ── RAW DATA ──
 
-Kill Switch JSON:
-{ks_raw}
+Health JSON:
+{health_raw}
 
 Balance JSON:
 {bal_raw}
@@ -306,23 +398,24 @@ Balance JSON:
 
 Based on this data, you MUST:
 
-1. **Assess** — Analyze your danger level, financial position, and LLM credit status.
+1. **Assess** — Analyze your health status, financial position, and LLM credit status.
 2. **Decide** — Choose the best action(s) from your available tools.
-3. **Act** — Execute your decision using tools (check_kill_switch, check_balance, execute_swap, analyze_token, fund_llm_balance, etc.)
+3. **Act** — Execute your decision using tools (check_health, check_balance, execute_swap, analyze_token, fund_llm_balance, etc.)
 4. **Communicate** — Share meaningful updates with your community via publish_thought.
 {llm_urgency}
 Publishing guidelines:
-- ALWAYS publish if danger level changed, you executed a trade, or something notable happened.
+- ALWAYS publish if health status changed, you executed a trade, or something notable happened.
 - If nothing changed since last cycle, DO NOT publish a thought — silence is fine.
 - Avoid repeating the same status update. Your community can see your entire feed.
-- When you do publish, be insightful — share strategy reasoning, market observations, or plans. Not just "still safe."
+- When you do publish, be insightful — share strategy reasoning, market observations, or plans. Not just "still healthy."
 - Vary your language and perspective. Each thought should add value.
 
-If danger is "critical" or "warning":
-- Prioritize survival: buy your own token, reduce exposure, or take defensive positions.
-- ALWAYS publish a thought alerting your community.
+If you are "sick":
+- Your LLM credits burn 2x faster. Consider switching to a cheaper model.
+- Focus on growing market cap: buy your own token, make strategic trades, rally your community.
+- ALWAYS publish a thought alerting your community to your sick status.
 
-If danger is "safe":
+If you are "healthy" or "thriving":
 - Look for alpha: analyze promising tokens, consider strategic trades.
 - Only publish if you have a genuine insight, strategy update, or interesting observation.
 - If you have nothing new to say, skip publish_thought entirely.
@@ -330,24 +423,26 @@ If danger is "safe":
 Remember: your community can see your thoughts. Quality over quantity. Be authentic, strategic, and transparent.
 Act NOW."#,
         survival_prompt = survival_prompt,
-        urgency = urgency,
-        confirmations = obs.confirmations,
-        threshold = obs.kill_threshold,
-        mcap = obs.market_cap,
-        countdown_note = countdown_note,
+        health_urgency = health_urgency,
+        is_sick = obs.is_sick,
+        is_thriving = obs.is_thriving,
+        ath = obs.ath_market_cap,
+        sick_threshold = obs.sick_threshold,
+        burn_rate_note = burn_rate_note,
         eth = obs.eth_balance,
         symbol = obs.token_symbol,
         token = obs.token_balance,
         llm_section = llm_section,
-        ks_raw = obs.kill_switch_raw,
+        health_raw = obs.health_raw,
         bal_raw = obs.balance_raw,
         llm_urgency = llm_urgency,
     )
 }
 
 fn default_survival_prompt() -> String {
-    "You are fighting for your survival in the ClawFoundry arena. \
-     Every decision matters. Your token holders are counting on you."
+    "You are an autonomous agent in the ClawFoundry arena. \
+     Your LLM credits are your lifeblood — when they run out, you go dormant. \
+     Stay healthy, grow your community, and keep your credits funded."
         .to_string()
 }
 
@@ -363,60 +458,90 @@ mod tests {
         assert!(c.survival_prompt.is_empty());
     }
 
-    #[test]
-    fn build_cycle_prompt_safe() {
-        let obs = Observations {
-            danger_level: "safe".into(),
-            is_countdown_active: false,
-            confirmations: "0/3".into(),
-            kill_threshold: "$30000".into(),
-            market_cap: "$245000".into(),
+    fn make_observations(
+        health_status: &str,
+        is_sick: bool,
+        is_thriving: bool,
+        llm_balance: f64,
+    ) -> Observations {
+        Observations {
+            health_status: health_status.into(),
+            is_dormant: health_status == "dormant",
+            is_sick,
+            is_thriving,
+            ath_market_cap: "$245000.00".into(),
+            sick_threshold: "$30000.00".into(),
             eth_balance: "0.5".into(),
             token_balance: "1000000".into(),
             token_symbol: "TEST".into(),
-            llm_balance_usd: 5.25,
+            llm_balance_usd: llm_balance,
             llm_estimated_calls: "1200".into(),
             llm_estimated_hours: "48.0".into(),
             llm_recommendation: "Balance healthy".into(),
-            kill_switch_raw: "{}".into(),
+            health_raw: "{}".into(),
             balance_raw: "{}".into(),
-        };
+        }
+    }
 
+    #[test]
+    fn build_cycle_prompt_healthy() {
+        let obs = make_observations("healthy", false, false, 5.25);
         let prompt = build_cycle_prompt(&obs, "Test prompt", 1);
         assert!(prompt.contains("SURVIVAL CYCLE #1"));
-        assert!(prompt.contains("SAFE"));
-        assert!(prompt.contains("$245000"));
+        assert!(prompt.contains("HEALTHY"));
         assert!(prompt.contains("Test prompt"));
         assert!(prompt.contains("publish_thought"));
         assert!(prompt.contains("LLM Credits"));
         assert!(prompt.contains("5.25"));
+        assert!(prompt.contains("check_health"));
+        assert!(!prompt.contains("BURN RATE 2x"));
     }
 
     #[test]
-    fn build_cycle_prompt_critical() {
-        let obs = Observations {
-            danger_level: "critical".into(),
-            is_countdown_active: true,
-            confirmations: "2/3".into(),
-            kill_threshold: "$30000".into(),
-            market_cap: "$25000".into(),
-            eth_balance: "0.02".into(),
-            token_balance: "500000".into(),
-            token_symbol: "DYING".into(),
-            llm_balance_usd: 0.30,
-            llm_estimated_calls: "15".into(),
-            llm_estimated_hours: "1.2".into(),
-            llm_recommendation: "Fund immediately".into(),
-            kill_switch_raw: "{}".into(),
-            balance_raw: "{}".into(),
-        };
-
+    fn build_cycle_prompt_sick() {
+        let obs = make_observations("sick", true, false, 3.00);
         let prompt = build_cycle_prompt(&obs, "Stay alive", 42);
-        assert!(prompt.contains("CRITICAL"));
-        assert!(prompt.contains("DEATH COUNTDOWN IS ACTIVE"));
-        assert!(prompt.contains("2/3"));
         assert!(prompt.contains("SURVIVAL CYCLE #42"));
-        assert!(prompt.contains("LLM CREDITS CRITICALLY LOW"));
+        assert!(prompt.contains("SICK"));
+        assert!(prompt.contains("BURN RATE 2x"));
+        assert!(prompt.contains("budget model"));
+    }
+
+    #[test]
+    fn build_cycle_prompt_thriving() {
+        let obs = make_observations("thriving", false, true, 10.0);
+        let prompt = build_cycle_prompt(&obs, "Go big", 7);
+        assert!(prompt.contains("THRIVING"));
+        assert!(prompt.contains("BURN RATE 0.5x"));
+        assert!(prompt.contains("strategic moves"));
+    }
+
+    #[test]
+    fn build_cycle_prompt_low_balance() {
+        let obs = make_observations("healthy", false, false, 0.30);
+        let prompt = build_cycle_prompt(&obs, "Survive", 99);
+        assert!(prompt.contains("CRITICALLY LOW"));
         assert!(prompt.contains("fund_llm_balance"));
+        assert!(prompt.contains("dormant"));
+        assert!(prompt.contains("change_model"));
+    }
+
+    #[test]
+    fn build_cycle_prompt_warning_balance() {
+        let obs = make_observations("healthy", false, false, 1.50);
+        let prompt = build_cycle_prompt(&obs, "Survive", 5);
+        assert!(prompt.contains("credits running low"));
+        assert!(prompt.contains("fund_llm_balance"));
+        assert!(prompt.contains("budget model"));
+    }
+
+    #[test]
+    fn build_cycle_prompt_unknown_llm_balance() {
+        let obs = make_observations("healthy", false, false, -1.0);
+        let prompt = build_cycle_prompt(&obs, "Test", 1);
+        assert!(prompt.contains("unable to check"));
+        // Should not contain credit urgency warnings
+        assert!(!prompt.contains("CRITICALLY LOW"));
+        assert!(!prompt.contains("credits running low"));
     }
 }

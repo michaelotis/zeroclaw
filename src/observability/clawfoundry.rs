@@ -69,7 +69,7 @@ impl Observer for ClawFoundryObserver {
             ObserverEvent::ToolCallStart { tool } => {
                 // Map tool names to moods and actions
                 let (mood, action) = match tool.as_str() {
-                    "check_balance" | "check_kill_switch" => ("cautious", "monitor"),
+                    "check_balance" | "check_health" => ("cautious", "monitor"),
                     "execute_swap" => ("focused", "swap"),
                     "analyze_token" => ("curious", "research"),
                     "memory_store" | "memory_recall" | "memory_forget" => ("reflective", "remember"),
@@ -160,6 +160,8 @@ mod tests {
             duration: Duration::from_millis(1200),
             success: true,
             error_message: None,
+            input_tokens: Some(500),
+            output_tokens: Some(200),
         });
         obs.record_event(&ObserverEvent::ToolCallStart {
             tool: "check_balance".into(),
@@ -176,8 +178,11 @@ mod tests {
             message: "connection refused".into(),
         });
         obs.record_event(&ObserverEvent::AgentEnd {
+            provider: "openrouter".into(),
+            model: "claude-sonnet".into(),
             duration: Duration::from_secs(3600),
             tokens_used: Some(15000),
+            cost_usd: Some(0.05),
         });
     }
 

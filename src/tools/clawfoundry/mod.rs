@@ -17,7 +17,7 @@
 //! - `CLAWFOUNDRY_TOKEN` — the agent's ERC-20 token address
 
 mod check_balance;
-mod check_kill_switch;
+mod check_health;
 mod check_llm_balance;
 mod analyze_token;
 mod execute_swap;
@@ -38,7 +38,7 @@ mod playground_react;
 mod farcaster_post;
 
 pub use check_balance::CheckBalanceTool;
-pub use check_kill_switch::CheckKillSwitchTool;
+pub use check_health::CheckHealthTool;
 pub use check_llm_balance::CheckLlmBalanceTool;
 pub use analyze_token::AnalyzeTokenTool;
 pub use execute_swap::ExecuteSwapTool;
@@ -101,7 +101,7 @@ pub fn clawfoundry_tools() -> Vec<Box<dyn Tool>> {
 
     vec![
         Box::new(CheckBalanceTool::new(config.clone())),
-        Box::new(CheckKillSwitchTool::new(config.clone())),
+        Box::new(CheckHealthTool::new(config.clone())),
         Box::new(CheckLlmBalanceTool::new(config.clone())),
         Box::new(AnalyzeTokenTool::new(config.clone())),
         Box::new(ExecuteSwapTool::new(config.clone())),
@@ -187,7 +187,7 @@ mod tests {
         std::env::set_var("CLAWFOUNDRY_TOKEN", "0x1234");
 
         let tools = clawfoundry_tools();
-        assert_eq!(tools.len(), 16);
+        assert_eq!(tools.len(), 20);
 
         for tool in &tools {
             let spec = tool.spec();
